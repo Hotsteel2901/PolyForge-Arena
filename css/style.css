@@ -1,0 +1,218 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #0b120e; }
+body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; color: #e8f2ea; user-select: none; }
+#app { position: fixed; inset: 0; }
+#game { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.hidden { display: none !important; }
+
+/* ---------- HUD ---------- */
+#hud { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+#crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 44px; height: 44px; }
+.ch-line { position: absolute; background: rgba(220,255,230,.92); box-shadow: 0 0 3px #000; transition: all .08s; }
+.ch-t { left: 21px; top: 0; width: 2px; height: 12px; }
+.ch-b { left: 21px; bottom: 0; width: 2px; height: 12px; }
+.ch-l { top: 21px; left: 0; width: 12px; height: 2px; }
+.ch-r { top: 21px; right: 0; width: 12px; height: 2px; }
+.ch-dot { position: absolute; left: 20px; top: 20px; width: 4px; height: 4px; border-radius: 50%; background: #fff; opacity: .85; }
+#hitmarker { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 34px; height: 34px; }
+.hm { position: absolute; width: 11px; height: 2px; background: #fff; box-shadow: 0 0 4px #f33; }
+.hm-tl { left: 0; top: 0; transform: rotate(-45deg); transform-origin: 0 50%; }
+.hm-tr { right: 0; top: 0; transform: rotate(45deg); transform-origin: 100% 50%; }
+.hm-bl { left: 0; bottom: 0; transform: rotate(45deg); transform-origin: 0 50%; }
+.hm-br { right: 0; bottom: 0; transform: rotate(-45deg); transform-origin: 100% 50%; }
+#hitmarker.hs .hm { background: #ffd23f; box-shadow: 0 0 6px #ff9; }
+#vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 55%, rgba(120,10,10,.75)); opacity: 0; transition: opacity .15s; }
+#lowhp { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 45%, rgba(160,0,0,.55)); opacity: 0; transition: opacity .5s; }
+#topbar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 18px; align-items: center; background: rgba(8,14,10,.62); padding: 7px 18px; border-radius: 8px; font-size: 15px; backdrop-filter: blur(4px); }
+#timer { font-size: 22px; font-weight: 700; color: #fff; min-width: 52px; text-align: center; }
+#score-ct { color: #69b7ff; font-weight: 700; }
+#score-t { color: #ffab5e; font-weight: 700; }
+#round-label { color: #b9d4c3; font-size: 12px; }
+#mode-label { color: #9fe6b6; font-size: 12px; }
+#room-code { color: #8fb3a0; font-size: 12px; cursor: pointer; user-select: text; border-bottom: 1px dashed rgba(143,179,160,.5); padding-bottom: 1px; }
+#room-code:hover { color: #9fe6b6; border-color: #57c87e; }
+#objective { position: absolute; top: 76px; left: 50%; transform: translateX(-50%); background: rgba(10,20,14,.7); padding: 6px 16px; border-radius: 6px; font-size: 14px; color: #ffe08a; }
+#killfeed { position: absolute; top: 84px; right: 14px; width: 260px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.kf { background: rgba(8,14,10,.68); padding: 3px 10px; border-radius: 4px; font-size: 13px; animation: kf-in .18s; }
+.kf b.killer { color: #7fd0ff; } .kf b.victim { color: #ff9b8a; } .kf b.sys { color: #ffd35e; }
+@keyframes kf-in { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+#status-dot { position: absolute; top: 12px; left: 12px; width: 11px; height: 11px; border-radius: 50%; background: #ff5a4e; box-shadow: 0 0 8px #f55; }
+#status-dot.ok { background: #55e07c; box-shadow: 0 0 8px #4f6; }
+#pause-btn { position: absolute; top: 12px; right: 14px; width: 40px; height: 40px; border-radius: 9px; border: 1px solid #2d4a39; background: rgba(16,36,26,.72); color: #d9ecdf; font-size: 18px; line-height: 1; cursor: pointer; z-index: 10; backdrop-filter: blur(4px); }
+#pause-btn:hover { border-color: #57c87e; background: rgba(22,51,32,.85); }
+#bottom-left { position: absolute; left: 20px; bottom: 24px; display: flex; flex-direction: column; gap: 6px; width: 240px; }
+#hp-wrap, #armor-wrap { display: flex; align-items: center; gap: 8px; }
+#hp-bar, #armor-bar { flex: 1; height: 12px; background: rgba(0,0,0,.55); border-radius: 6px; overflow: hidden; border: 1px solid rgba(255,255,255,.15); }
+#hp-bar i { display: block; height: 100%; background: linear-gradient(90deg,#3ddc63,#9df0a8); transition: width .12s; }
+#armor-bar i { display: block; height: 100%; background: linear-gradient(90deg,#3f9fff,#9ecbff); transition: width .12s; }
+#hp-label, #armor-label { width: 34px; text-align: right; font-size: 13px; }
+#weapon-name { font-size: 14px; color: #d9ecdf; text-shadow: 0 1px 3px #000; }
+#bottom-right { position: absolute; right: 20px; bottom: 24px; text-align: right; }
+#ammo { font-size: 30px; font-weight: 800; text-shadow: 0 2px 6px #000; }
+#ammo-sep { color: #8fa99a; font-size: 20px; }
+#grenade-count { font-size: 13px; color: #ffe08a; margin-top: 4px; }
+#slots { display: flex; gap: 6px; justify-content: flex-end; margin-top: 10px; }
+.slot { width: 34px; height: 34px; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 15px; background: rgba(10,20,14,.6); }
+.slot.on { border-color: #9fe6b6; background: rgba(80,160,110,.5); box-shadow: 0 0 8px rgba(120,255,170,.35); }
+#scoreboard { position: absolute; inset: 0; background: rgba(4,10,6,.72); display: flex; flex-direction: column; align-items: center; padding-top: 9vh; }
+.sb-title { font-size: 26px; font-weight: 800; margin-bottom: 14px; letter-spacing: 2px; }
+#score-table { border-collapse: collapse; min-width: 560px; max-width: 90vw; }
+#score-table th, #score-table td { padding: 7px 14px; text-align: center; border-bottom: 1px solid rgba(255,255,255,.08); font-size: 14px; }
+#score-table th { color: #9fc3ad; font-size: 12px; }
+#score-table .team-1 { color: #7fd0ff; } #score-table .team-2 { color: #ffab5e; }
+.sb-hint { margin-top: 18px; color: #7c9787; font-size: 12px; }
+#chat-wrap { position: absolute; left: 16px; bottom: 150px; width: 380px; max-width: 70vw; }
+#chat-log { display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow: hidden; }
+.chat-line { font-size: 13px; background: rgba(8,14,10,.55); padding: 2px 8px; border-radius: 4px; width: fit-content; max-width: 100%; }
+.chat-line .name { color: #8fd6ff; } .chat-line.system { color: #ffd35e; }
+#chat-input { pointer-events: auto; width: 100%; margin-top: 6px; background: rgba(8,14,10,.8); border: 1px solid rgba(255,255,255,.25); color: #fff; padding: 7px 10px; border-radius: 6px; font-size: 14px; outline: none; }
+#mods-hud { position: absolute; right: 14px; top: 150px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+#dead-msg { position: absolute; left: 50%; top: 36%; transform: translateX(-50%); font-size: 26px; font-weight: 800; color: #ff6b5e; text-shadow: 0 2px 8px #000; }
+#hint { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); font-size: 11px; color: rgba(220,240,228,.55); text-align: center; white-space: nowrap; }
+#paused { position: absolute; inset: 0; background: rgba(4,10,6,.5); display: flex; align-items: center; justify-content: center; pointer-events: auto; }
+#banner { position: absolute; top: 22%; left: 50%; transform: translate(-50%, -50%); text-align: center; opacity: 0; transition: opacity .25s; pointer-events: none; }
+#banner.show { opacity: 1; }
+#banner-title { font-size: 30px; font-weight: 900; text-shadow: 0 4px 14px #000, 0 0 22px rgba(120,255,170,.28); }
+#banner-sub { font-size: 13px; color: #d6e9dd; text-shadow: 0 2px 8px #000; margin-top: 5px; }
+
+/* ---------- 菜单 ---------- */
+#menu { position: absolute; inset: 0; background: radial-gradient(ellipse at 30% 20%, #14291d 0%, #081009 70%); display: flex; align-items: center; justify-content: center; z-index: 20; }
+.menu-inner { width: 380px; max-width: 92vw; display: flex; flex-direction: column; gap: 12px; }
+.logo { font-size: 42px; font-weight: 900; letter-spacing: 4px; background: linear-gradient(90deg, #7be8a2, #d8ffab); -webkit-background-clip: text; background-clip: text; color: transparent; text-align: center; }
+.logo span { font-weight: 400; color: #a8c8b4; -webkit-text-fill-color: #a8c8b4; }
+.tagline { text-align: center; color: #8ba898; font-size: 13px; margin-bottom: 14px; }
+.menu-row { display: flex; flex-direction: column; gap: 5px; }
+.menu-row label { font-size: 12px; color: #9fc3ad; }
+.menu-row input, .menu-row select { background: #0d1a12; border: 1px solid #2d4a39; color: #e8f2ea; padding: 10px 12px; border-radius: 8px; font-size: 15px; outline: none; }
+.menu-row input:focus, .menu-row select:focus { border-color: #57c87e; }
+.btn { padding: 12px; border-radius: 9px; border: 1px solid #2d4a39; background: #10241a; color: #d9ecdf; font-size: 15px; cursor: pointer; transition: all .12s; }
+.btn:hover { border-color: #57c87e; background: #163320; }
+.btn.primary { background: linear-gradient(90deg, #2f9e5b, #3fbe70); border: none; font-weight: 700; font-size: 16px; color: #06210f; }
+.btn.primary:hover { filter: brightness(1.12); }
+.btn.mini { padding: 5px 12px; font-size: 12px; border-radius: 16px; }
+#auth-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 14px; }
+#auth-status { font-size: 12px; color: #8fb3a0; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#my-stats { text-align: center; font-size: 12px; color: #9fe6b6; margin-bottom: 10px; }
+.menu-mods { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; min-height: 22px; }
+.mod-chip { font-size: 11px; padding: 3px 9px; border-radius: 20px; background: rgba(90,160,120,.16); border: 1px solid rgba(120,255,170,.25); color: #9fe6b6; }
+.footer { text-align: center; color: #5f7a6b; font-size: 11px; margin-top: 10px; }
+
+/* ---------- 设置 / 加载 / 提示 ---------- */
+#settings { position: absolute; inset: 0; background: rgba(4,10,6,.8); display: flex; align-items: center; justify-content: center; z-index: 25; }
+.panel { background: #0d1a12; border: 1px solid #2d4a39; border-radius: 14px; padding: 26px; width: 360px; max-width: 90vw; display: flex; flex-direction: column; gap: 14px; }
+.panel h2 { margin-bottom: 4px; }
+.panel label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #b9d4c3; }
+.panel input[type=range] { accent-color: #57c87e; }
+#loading { position: absolute; inset: 0; background: rgba(5,12,8,.85); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 30; }
+.spinner { width: 42px; height: 42px; border: 4px solid #1e3a2a; border-top-color: #57c87e; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#toast { position: absolute; left: 50%; bottom: 30%; transform: translateX(-50%); background: rgba(60,20,20,.9); border: 1px solid #c45; padding: 10px 20px; border-radius: 8px; z-index: 40; font-size: 14px; }
+
+/* ---------- 购买菜单 ---------- */
+#buy-menu { position: absolute; inset: 0; background: rgba(4,10,6,.78); display: flex; align-items: center; justify-content: center; z-index: 18; }
+.buy-panel { position: relative; background: #0d1a12; border: 1px solid #2d4a39; border-radius: 14px; padding: 24px 26px; width: 480px; max-width: 92vw; max-height: 84vh; overflow: auto; }
+.buy-close { position: absolute; top: 10px; right: 12px; width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(255,255,255,.25); background: rgba(255,255,255,.08); color: #e8f2ea; font-size: 18px; cursor: pointer; line-height: 1; }
+.buy-close:hover { background: rgba(255,80,60,.35); border-color: #ff8a70; }
+.buy-panel h2 { margin-bottom: 8px; }
+.buy-money { font-size: 20px; font-weight: 800; color: #ffd35e; margin-bottom: 4px; }
+#buy-countdown { font-size: 12px; color: #9fc3ad; margin-bottom: 12px; }
+#buy-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.buy-card { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #10241a; border: 1px solid #2d4a39; border-radius: 9px; color: #e8f2ea; cursor: pointer; font-size: 14px; }
+.buy-card:hover:not(.disabled) { border-color: #57c87e; background: #163320; }
+.buy-card span { color: #ffd35e; font-weight: 700; }
+.buy-card.disabled { opacity: .42; cursor: not-allowed; }
+.buy-refunds { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.buy-refunds.empty { color: #7c9787; font-size: 12px; }
+.refund-chip { padding: 7px 12px; border-radius: 8px; background: rgba(120,90,30,.28); border: 1px solid rgba(255,210,90,.45); color: #ffd35e; cursor: pointer; font-size: 12px; }
+.refund-chip:hover { background: rgba(160,120,40,.4); }
+.buy-hint { margin-top: 12px; color: #7c9787; font-size: 12px; text-align: center; }
+
+/* ---------- 移动端 ---------- */
+html, body { overscroll-behavior: none; }
+body {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+/* #hud 全局 pointer-events:none，以下可点击元素需重新开启 */
+#pause-btn, #room-code { pointer-events: auto; }
+
+#touch-ui { position: absolute; inset: 0; pointer-events: none; }
+#touch-ui .zone { position: absolute; pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent; }
+#joy-base {
+  left: max(24px, env(safe-area-inset-left));
+  bottom: max(30px, calc(env(safe-area-inset-bottom) + 14px));
+  width: 128px; height: 128px; border-radius: 50%;
+  background: rgba(255,255,255,.08); border: 2px solid rgba(255,255,255,.22);
+}
+#joy-knob { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 52px; height: 52px; border-radius: 50%; background: rgba(255,255,255,.28); }
+#look-zone { left: 0; right: 0; top: 0; bottom: 0; }
+#btn-cluster {
+  position: absolute;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(26px, calc(env(safe-area-inset-bottom) + 10px));
+  width: 290px; height: 260px; pointer-events: none;
+}
+.touch-btn { display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 2px solid rgba(255,255,255,.55); color: #fff; font-size: 12px; text-shadow: 0 1px 3px #000; background: rgba(20,40,28,.55); }
+.btn-label { pointer-events: none; }
+#fire-btn { width: 76px; height: 130px; border-radius: 38px; background: rgba(220,60,60,.5); border-color: rgba(255,120,120,.8); right: 0; bottom: 0; font-size: 16px; }
+#chat-btn { width: 56px; height: 56px; background: rgba(90,180,150,.5); right: 0; bottom: 190px; }
+#use-btn { width: 56px; height: 56px; background: rgba(230,190,80,.5); right: 90px; bottom: 190px; }
+#grenade-btn { width: 56px; height: 56px; background: rgba(190,110,90,.5); right: 160px; bottom: 190px; }
+#score-btn { width: 56px; height: 56px; background: rgba(140,140,190,.5); right: 226px; bottom: 190px; }
+#jump-btn { width: 60px; height: 60px; background: rgba(80,160,110,.45); right: 90px; bottom: 0; }
+#ads-btn { width: 56px; height: 56px; background: rgba(80,120,180,.5); right: 160px; bottom: 0; }
+#crouch-btn { width: 56px; height: 56px; background: rgba(150,110,60,.5); right: 226px; bottom: 0; }
+#reload-btn { width: 56px; height: 56px; background: rgba(150,110,60,.5); right: 90px; bottom: 70px; }
+#switch-btn { width: 56px; height: 56px; background: rgba(90,150,190,.5); right: 160px; bottom: 70px; }
+#shop-btn { width: 56px; height: 56px; background: rgba(255,200,80,.55); right: 226px; bottom: 70px; }
+.touch-btn.pressed { transform: scale(0.9); filter: brightness(1.45); }
+/* 暂停时禁用触控层：让暂停面板/退出按钮可点击（look-zone 默认盖住整屏） */
+#touch-ui.touch-disabled .zone { pointer-events: none; }
+
+/* 移动端聊天输入框移到屏幕顶部，避免被虚拟键盘遮挡 */
+#chat-wrap.mobile-open { top: max(10px, env(safe-area-inset-top)); bottom: auto; left: 50%; transform: translateX(-50%); width: 92vw; max-width: 92vw; }
+
+/* 触屏为主设备：HUD 血量/弹药抬到触控区上方，避免被手指遮挡 */
+@media (hover: none) and (pointer: coarse) {
+  #bottom-left { bottom: 176px; left: 14px; width: 190px; }
+  #bottom-right { bottom: 306px; right: 14px; }
+  #chat-wrap { bottom: 330px; }
+}
+
+/* 窄屏（竖屏手机）：压缩顶栏与记分板 */
+@media (max-width: 560px) {
+  #topbar { gap: 10px; padding: 5px 12px; font-size: 13px; top: max(8px, env(safe-area-inset-top)); max-width: calc(100vw - 16px); }
+  #mode-label, #team-label, #round-label { display: none; }
+  #room-code { max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status-dot { top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); }
+  #pause-btn { top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); }
+  #objective { top: 60px; font-size: 12px; padding: 5px 12px; }
+  #killfeed { top: 62px; right: 10px; width: 200px; }
+  #ammo { font-size: 22px; }
+  #weapon-name { font-size: 12px; }
+  #slots { margin-top: 4px; }
+  .slot { width: 26px; height: 26px; font-size: 12px; }
+  #score-table { min-width: 0; width: 94vw; }
+  #score-table th, #score-table td { padding: 5px 4px; font-size: 12px; }
+  .sb-title { font-size: 20px; }
+  #banner-title { font-size: 22px; }
+  #dead-msg { font-size: 20px; }
+}
+
+/* 矮屏（横屏手机）：缩小触控区与 HUD，避免左右重叠 */
+@media (max-height: 500px) {
+  #btn-cluster { transform: scale(0.8); transform-origin: bottom right; }
+  #joy-base { transform: scale(0.8); transform-origin: bottom left; }
+  #bottom-left { bottom: 156px; left: 14px; }
+  #bottom-right { bottom: 252px; right: 14px; }
+  #chat-wrap { bottom: 280px; }
+  #killfeed { top: 62px; }
+}
+
+#use-progress { position: absolute; left: 50%; bottom: 30%; transform: translateX(-50%); width: 280px; text-align: center; }
+#use-progress-label { font-size: 14px; color: #ffe08a; text-shadow: 0 1px 4px #000; margin-bottom: 6px; }
+#use-progress-bar { height: 10px; background: rgba(0,0,0,.55); border-radius: 5px; overflow: hidden; border: 1px solid rgba(255,255,255,.25); }
+#use-progress-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg,#ffd35e,#ff9a3c); transition: width .08s; }

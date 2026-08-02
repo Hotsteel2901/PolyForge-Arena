@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1a12">
+  <title>PolyForge Arena · VibeHub 联机 FPS</title>
+  <link rel="stylesheet" href="./css/style.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <canvas id="game"></canvas>
+
+    <div id="hud" class="hidden">
+      <div id="crosshair">
+        <span class="ch-line ch-t"></span><span class="ch-line ch-b"></span>
+        <span class="ch-line ch-l"></span><span class="ch-line ch-r"></span>
+        <span class="ch-dot"></span>
+        <div id="hitmarker" class="hidden"><i class="hm hm-tl"></i><i class="hm hm-tr"></i><i class="hm hm-bl"></i><i class="hm hm-br"></i></div>
+      </div>
+      <div id="vignette"></div>
+      <div id="lowhp"></div>
+      <div id="banner"><div id="banner-title"></div><div id="banner-sub"></div></div>
+      <div id="topbar">
+        <div id="mode-label"></div>
+        <div id="timer">--:--</div>
+        <div id="score-ct">CT 0</div>
+        <div id="score-t">T 0</div>
+        <div id="team-label"></div>
+        <div id="money" class="hidden">💰 800</div>
+        <div id="ping">--</div>
+        <div id="round-label">第 0 回合</div>
+        <div id="room-code" title="点击复制房间码"></div>
+      </div>
+      <div id="objective"></div>
+      <div id="use-progress" class="hidden">
+        <div id="use-progress-label">安放炸弹…</div>
+        <div id="use-progress-bar"><i></i></div>
+      </div>
+      <div id="killfeed"></div>
+      <div id="status-dot" title="连接状态"></div>
+      <button id="pause-btn" class="hud-btn" title="菜单（暂停 / 退出房间）">☰</button>
+      <div id="bottom-left">
+        <div id="hp-wrap"><div id="hp-label">100</div><div id="hp-bar"><i></i></div></div>
+        <div id="armor-wrap"><div id="armor-label">50</div><div id="armor-bar"><i></i></div></div>
+        <div id="weapon-name">—</div>
+      </div>
+      <div id="bottom-right">
+        <div id="ammo"><span id="ammo-cur">0</span><span id="ammo-sep">/</span><span id="ammo-res">0</span></div>
+        <div id="grenade-count">雷 ×1</div>
+        <div id="slots"></div>
+      </div>
+      <div id="scoreboard" class="hidden">
+        <div class="sb-title">记分板</div>
+        <table id="score-table"><thead><tr><th>玩家</th><th>队伍</th><th>击杀</th><th>死亡</th><th>得分</th><th>状态</th></tr></thead><tbody></tbody></table>
+        <div class="sb-hint">Tab 关闭</div>
+      </div>
+      <div id="chat-wrap">
+        <div id="chat-log"></div>
+        <input id="chat-input" maxlength="120" placeholder="回车聊天…" class="hidden">
+      </div>
+      <div id="mods-hud"></div>
+      <div id="dead-msg" class="hidden">你已阵亡 · 等待下一回合</div>
+      <div id="hint">按 = 菜单（暂停/退出） · 点击画面锁定鼠标 · 按住 Alt 释放鼠标 · WASD 移动 · Shift 疾跑 · Ctrl 下蹲 · 右键开镜 · R 换弹 · E 互动 · 1-4 换枪 · Tab 记分板</div>
+      <div id="paused" class="hidden"><div class="panel"><div>已暂停 · 点击画面继续</div><button id="leave-room-btn" class="btn">退出房间</button></div></div>
+    </div>
+
+    <div id="menu">
+      <div class="menu-inner">
+        <div class="logo">POLYFORGE <span>ARENA</span></div>
+        <div class="tagline">网页原生 · P2P 联机 · 支持 Mod</div>
+        <div id="auth-row">
+          <span id="auth-status">正在连接 VibeHub…</span>
+          <button id="login-btn" class="btn mini hidden">登录</button>
+          <button id="logout-btn" class="btn mini hidden">退出</button>
+        </div>
+        <div id="my-stats" class="hidden"></div>
+        <div class="menu-row">
+          <label>昵称</label>
+          <input id="name-input" maxlength="16" value="战士">
+        </div>
+        <div class="menu-row">
+          <label>模式</label>
+          <select id="mode-select">
+            <option value="defusal">拆弹模式（PVP）</option>
+            <option value="zombie">生化模式（感染）</option>
+          </select>
+        </div>
+        <div class="menu-row">
+          <label>阵营</label>
+          <select id="team-select">
+            <option value="random">随机</option>
+            <option value="ct">CT（蓝色）</option>
+            <option value="t">T（橙色）</option>
+          </select>
+        </div>
+        <div class="menu-row">
+          <label>房间码</label>
+          <input id="room-input" value="" placeholder="留空 = 快速加入 / 建房">
+        </div>
+        <button id="connect-btn" class="btn primary">进入战斗</button>
+        <button id="settings-btn" class="btn">设置</button>
+        <div id="menu-mods" class="menu-mods"></div>
+        <div class="footer">程序化建模 · 零外部美术资产 · 房主权威 · VibeHub P2P 联机</div>
+      </div>
+    </div>
+
+    <div id="settings" class="hidden">
+      <div class="panel">
+        <h2>设置</h2>
+        <label>鼠标灵敏度 <input type="range" id="set-sens" min="0.2" max="3" step="0.1"></label>
+        <label>视野 FOV <input type="range" id="set-fov" min="60" max="110" step="1"></label>
+        <label>音量 <input type="range" id="set-vol" min="0" max="100" step="1"></label>
+        <label>背景音乐 <select id="set-music"><option value="1">开</option><option value="0">关</option></select></label>
+        <label>阴影 <select id="set-shadow"><option value="1">开</option><option value="0">关</option></select></label>
+        <label>画质 <select id="set-quality"><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label>
+        <button id="settings-close" class="btn primary">返回</button>
+      </div>
+    </div>
+
+    <div id="loading" class="hidden"><div class="spinner"></div><div id="loading-text">连接中…</div></div>
+    <div id="toast" class="hidden"></div>
+  </div>
+  <!-- VibeHub SDK：必须用绝对地址（游戏页面在 vibeapps 域，相对路径会 404） -->
+  <script src="https://vibe.lumigrav.space/sdk/v3/vibehub.js"></script>
+  <script type="module" src="./js/main.js"></script>
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"37d6f97ae1b54103bc14c617b1c7b64a","r":1}' crossorigin="anonymous"></script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a24e36507844b6a8',t:'MTc4NTY4NTU1Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

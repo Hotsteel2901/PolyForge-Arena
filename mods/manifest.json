@@ -1,0 +1,10 @@
+{
+  "server": [
+    { "id": "energy-rifle", "name": "AE-7 能量步枪", "version": "1.0.0" },
+    { "id": "cryo-blaster", "name": "CR-7 冰霜冲击枪", "version": "1.0.0" },
+    { "id": "railgun", "name": "MG-9 磁轨步枪", "version": "1.0.0" }
+  ],
+  "client": [
+    { "id": "energy-rifle", "name": "AE-7 能量步枪", "version": "1.0.0" }
+  ]
+}
