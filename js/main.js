@@ -385,6 +385,13 @@ function backToMenu() {
   state.inGame = false;
   net.leave();
   $('room-code').textContent = '';
+  // 重置武器状态，避免跨房间残留（如生化买过的 AE-7 在拆弹局闪出）
+  state.selfWeaponId = null;
+  state.selfPrimaryId = null;
+  state.zombieCatalog = [];
+  state.zombieEquippedId = null;
+  state.pendingLocal = null;
+  state.lastSwitchSeq = 0;
   if (state.mapGroup) {
     renderer.scene.remove(state.mapGroup);
     state.mapGroup = null;

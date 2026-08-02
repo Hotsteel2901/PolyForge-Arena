@@ -1,7 +1,5 @@
 // 示例服务器 Mod：注册武器 + 事件钩子 + 面向玩家的 RPC。
-// 新武器自动出现在 /api/mods 列表，并替换人类主武器槽位。
-
-import { WeaponRuntime } from '../../../shared/weapons.js';
+// AE-7 只会出现在生化模式选枪目录中（不自动替换任何人主武器，需玩家购买）。
 
 export default {
   id: 'energy-rifle',
@@ -33,19 +31,7 @@ export default {
     };
     ctx.registerWeapon(def);
 
-    // 替换人类主武器（含之后加入的玩家）。
-    // 生化模式不做自动替换：主武器由玩家在“选枪”中购买决定，避免买枪被覆盖/浪费钱。
-    ctx.on('player_spawn', (data) => {
-      const p = data.player;
-      if (p.isZombie) return;
-      if (ctx.mode === 'zombie') return;
-      if (!p.weapons.has('energy_rifle')) {
-        p.weapons.set(2, new WeaponRuntime(def));
-        p.activeSlot = 2;
-      }
-    });
-
-    // 能量武器击杀额外计分
+    // 击杀额外计分
     ctx.on('player_death', (data) => {
       if (data.info?.weapon === 'energy_rifle' && data.killer && data.killer !== data.victim) {
         data.killer.score += 8;
