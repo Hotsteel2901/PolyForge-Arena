@@ -146,7 +146,9 @@ export function killPlayer(room, killer, victim, info = {}) {
   const event = {
     type: 'kill',
     killer: killer?.id,
+    killerName: killer?.name,
     victim: victim.id,
+    victimName: victim.name,
     weapon: info.weapon ?? 'unknown',
     headshot: !!info.headshot,
     zombie: victim.isZombie ? 1 : 0,
