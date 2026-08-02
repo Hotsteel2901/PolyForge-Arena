@@ -258,6 +258,7 @@ function enterGame(welcome) {
   state.connected = true;
   net.connected = true;
   state.selfId = welcome.id;
+  state.selfName = $('name-input').value.trim() || '战士';
   hud.selfId = welcome.id;
   state.mode = welcome.mode;
   state.map = MAPS[welcome.map] || MAPS.vertex;
@@ -472,8 +473,9 @@ function wireEvents() {
   net.on('state', (msg) => handleState(msg));
 
   net.on('kill', (msg) => {
-    msg.killerName = state.players.get(msg.killer)?.next?.n;
-    msg.victimName = state.players.get(msg.victim)?.next?.n;
+    // 优先用房主下发的名字；旧版房主无名字时再本地查（自己不在 state.players 里，用 selfName 兜底）
+    msg.killerName = msg.killerName || state.players.get(msg.killer)?.next?.n || (msg.killer === state.selfId ? state.selfName : null);
+    msg.victimName = msg.victimName || state.players.get(msg.victim)?.next?.n || (msg.victim === state.selfId ? state.selfName : null);
     hud.addKillFeed(msg);
     const victim = state.players.get(msg.victim);
     if (victim) {
