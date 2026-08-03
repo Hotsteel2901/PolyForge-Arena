@@ -32,10 +32,10 @@ export default {
     };
     ctx.registerWeapon(def);
 
-    // 冰冻减速：命中僵尸把减速叠加到 1 秒（约 30 tick）
+    // 冰冻减速：命中僵尸把减速叠加到约 1.5 秒（45 tick），冰冻期间明显降速
     ctx.on('player_damage', (data) => {
       if (data.attacker && data.victim && data.victim.isZombie && data.weapon === 'cryo_gun') {
-        data.victim.slowTicks = Math.max(data.victim.slowTicks || 0, 30);
+        data.victim.slowTicks = Math.max(data.victim.slowTicks || 0, 45);
       }
     });
 

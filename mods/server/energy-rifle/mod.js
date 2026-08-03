@@ -28,6 +28,7 @@ export default {
       falloffMin: 0.8,
       sound: 'rifle',
       energy: true,
+      pierce: true, // 能量束贯穿直线上的多个目标
     };
     ctx.registerWeapon(def);
 

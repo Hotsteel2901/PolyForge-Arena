@@ -255,6 +255,7 @@ async function connect() {
 }
 
 function enterGame(welcome) {
+  if (state.connected) return; // 重复 welcome（房主重发握手）时忽略
   state.connected = true;
   net.connected = true;
   state.selfId = welcome.id;
@@ -592,6 +593,22 @@ function wireEvents() {
     hud.toast('弹药已补给');
     sfx.pickup();
   });
+  net.on('health_refill', () => {
+    hud.toast('生命已回复');
+    sfx.pickup();
+  });
+  net.on('health_box', (msg) => {
+    effects.impact({ x: msg.pos.x, y: msg.pos.y + 0.8, z: msg.pos.z }, 'heal');
+  });
+  net.on('finale_start', (msg) => {
+    const parts = [];
+    if (msg.hunters > 0) parts.push(`${msg.hunters} 名琉璃猎人`);
+    if (msg.king) parts.push(`尸王 ${msg.king}`);
+    if (msg.servants > 0) parts.push(`${msg.servants} 只尸仆`);
+    hud.banner('琉璃决战 · 不死不休', (parts.length ? parts.join(' · ') : '最终决战') + ' · 死亡不再复活');
+    sfx.roundStart();
+    dispatchMods(state.mods, 'finale_start', msg);
+  });
   net.on('reloading', () => sfx.reload());
   net.on('use_progress', (msg) => {
     hud.showUseProgress(msg.action, msg.progress);
@@ -653,7 +670,7 @@ function wireEvents() {
 
 function winnerText(msg) {
   const map = {
-    CT: 'CT 方获胜', T: 'T 方获胜', HUMAN: '人类获胜！', ZOMBIE: '僵尸获胜！',
+    CT: 'CT 方获胜', T: 'T 方获胜', HUMAN: '人类获胜！', ZOMBIE: '僵尸获胜！', DRAW: '平局 · 各得一分',
   };
   return map[msg.winner] || msg.winner;
 }
@@ -666,6 +683,8 @@ function reasonText(reason) {
     timeout: '时间耗尽',
     survived: '人类存活至时间结束',
     infected_all: '所有人类已被感染',
+    zombies_eliminated: '丧尸全灭',
+    mutual_annihilation: '同归于尽',
   }[reason] || '';
 }
 
@@ -688,9 +707,9 @@ function handleState(msg) {
       mesh.position.set(e.x, e.y, e.z);
       mesh.rotation.y = e.ya;
       renderer.scene.add(mesh);
-      const tag = buildNameTag(e.n, e.h, e.zb ? PHYS.ZOMBIE_HP : 100, !!e.zb, e.t, !!e.bc);
+      const tag = buildNameTag(e.n, e.h, e.mx || (e.zb ? PHYS.ZOMBIE_HP : 100), !!e.zb, e.t, !!e.bc, e.ft || 0);
       renderer.scene.add(tag);
-      rec = { last: e, next: e, t0: performance.now(), mesh, tag, zombie: !!e.zb, team: e.t, tagHp: -1, tagName: '', tagZombie: null, tagTeam: null, tagCarrier: null };
+      rec = { last: e, next: e, t0: performance.now(), mesh, tag, zombie: !!e.zb, team: e.t, tagHp: -1, tagName: '', tagZombie: null, tagTeam: null, tagCarrier: null, tagMax: -1, tagFt: -1 };
       state.players.set(e.i, rec);
       window.__nameTagCount = state.players.size;
     } else {
@@ -708,17 +727,21 @@ function handleState(msg) {
       }
     }
     rec.mesh.visible = !!e.al;
-    if (rec.tag && (rec.tagHp !== e.h || rec.tagName !== e.n || rec.tagZombie !== !!e.zb || rec.tagTeam !== e.t || rec.tagCarrier !== !!e.bc)) {
+    if (rec.tag && (rec.tagHp !== e.h || rec.tagName !== e.n || rec.tagZombie !== !!e.zb || rec.tagTeam !== e.t || rec.tagCarrier !== !!e.bc || rec.tagMax !== (e.mx || 0) || rec.tagFt !== (e.ft || 0))) {
       rec.tagHp = e.h;
       rec.tagName = e.n;
       rec.tagZombie = !!e.zb;
       rec.tagTeam = e.t;
       rec.tagCarrier = !!e.bc;
+      rec.tagMax = e.mx || 0;
+      rec.tagFt = e.ft || 0;
       rec.tag.userData.hp = e.h;
       rec.tag.userData.name = e.n;
       rec.tag.userData.zombie = !!e.zb;
       rec.tag.userData.team = e.t;
       rec.tag.userData.carrier = !!e.bc;
+      rec.tag.userData.maxHp = e.mx || 100;
+      rec.tag.userData.ft = e.ft || 0;
       rec.tag.userData.redraw();
     }
   }

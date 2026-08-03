@@ -92,6 +92,24 @@ export const WEAPON_SLOTS = Object.freeze({
   GRENADE: 3,
 });
 
+// 生化模式“琉璃决战”末段：最后 60 秒全员变身、不再复活
+export const FINALE = Object.freeze({
+  DURATION: 60,
+  HUNTER_HP: 500,
+  HUNTER_ARMOR: 100,
+  HUNTER_DAMAGE: 3.0,
+  KING_HP: 1200,
+  KING_ARMOR: 80,
+  KING_DAMAGE: 2.6, // 必须略低于琉璃猎人
+  SERVANT_HP: 800,
+  SERVANT_ARMOR: 40,
+  SERVANT_DAMAGE: 1.6,
+  ZOMBIE_HP_MULT: 1.3, // 其余丧尸仅小幅提升血量
+});
+
+// 回血箱每次回复量（人类在生化模式中使用）
+export const HEALTH_BOX_HEAL = 100;
+
 export const INPUT_MAX_HISTORY = 64;
 // VibeHub 规范：实时快照频率 15-20Hz。模拟仍在 30Hz 固定步长运行（TICK_RATE），
 // 快照每 50ms 广播一次（20Hz），控制 P2P 带宽；客户端以 50ms 缓冲 + 100ms 插值窗口渲染。

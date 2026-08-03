@@ -91,6 +91,17 @@ export class Net {
           } catch (err) {
             console.warn('[net] quickJoin failed, will host a new room', err);
           }
+          if (!targetId) {
+            // 房主刚建房的 announce 可能尚未生效：短暂等待后重试一次，避免误开新房间
+            try {
+              await new Promise((r) => setTimeout(r, 800));
+              targetId = await this.vibe.rooms.quickJoin({
+                filter: (r) => !!r.open && !!r.max && r.mode === mode && (r.players ?? 0) < r.max,
+              });
+            } catch (err) {
+              console.warn('[net] quickJoin retry failed', err);
+            }
+          }
         }
         if (!targetId) {
           targetId = randRoomId();
@@ -139,11 +150,20 @@ export class Net {
       }
 
       // 非房主：先挂 welcome 监听（welcome 由 join 消息触发，必须提前注册），再发加入意图；
-      // 超时=房主离线/房间残留陈旧房主（房主刷新页面后的典型场景）
+      // 注意：vibe.room.join() 刚返回时 P2P/中继连接可能尚未建立，首条 join 会被丢弃，
+      // 导致房主收不到、welcome 永不返回。因此在等待 welcome 期间周期性重发（房主会忽略重复 join）。
       const welcomePromise = this.waitForWelcome(10000);
       const joinMsg = { type: 'join', name, mode, team };
-      if (this.hostPeerId) this.room.send(joinMsg, this.hostPeerId);
-      else this.room.send(joinMsg);
+      const sendJoin = () => {
+        if (this.hostPeerId) this.room.send(joinMsg, this.hostPeerId);
+        else this.room.send(joinMsg);
+      };
+      sendJoin();
+      const joinRetry = setInterval(sendJoin, 700);
+      welcomePromise.then(
+        () => clearInterval(joinRetry),
+        () => clearInterval(joinRetry)
+      );
       try {
         await welcomePromise;
       } catch (err) {

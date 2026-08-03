@@ -32,18 +32,24 @@ export class Host {
     await room.start(); // 浏览器版 mods 加载 → 填 Bot → 开局/购买阶段 → 30Hz 主循环
     // 房主本人作为玩家加入（本地回环）
     this.handleJoin({ name, mode: m, team }, this.net.peerId);
-    // 上架房间供快速匹配（quickJoin 读取 open/max/mode 等元数据）
-    try {
-      await this.net.room.announce({
-        open: true,
-        listed: true,
-        max: CONFIG.maxPlayers,
-        mode: m,
-        map: room.mapId,
-        modeLabel: MODE_LABEL[m],
-      });
-    } catch (err) {
-      console.warn('[host] announce failed', err);
+    // 上架房间供快速匹配（quickJoin 读取 open/max/mode 等元数据）。
+    // 首包可能因网络抖动失败：重试几次，确保房间尽快能被随机匹配搜到。
+    const announceMeta = {
+      open: true,
+      listed: true,
+      max: CONFIG.maxPlayers,
+      mode: m,
+      map: room.mapId,
+      modeLabel: MODE_LABEL[m],
+    };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await this.net.room.announce(announceMeta);
+        break;
+      } catch (err) {
+        if (attempt === 2) console.warn('[host] announce failed', err);
+        else await new Promise((r) => setTimeout(r, 700));
+      }
     }
     this.net.connected = true;
   }
@@ -104,7 +110,15 @@ export class Host {
   }
 
   handleJoin(msg, fromId) {
-    if (this.peerToPlayer.has(fromId)) return; // 已加入
+    if (this.peerToPlayer.has(fromId)) {
+      // 重复 join（客户端在连接建立前重发）：重发 welcome，确保握手完成（客户端忽略已处理的 welcome）
+      const pid = this.peerToPlayer.get(fromId);
+      const p = this.room?.players.get(pid);
+      if (p && this.room.connections.has(pid)) {
+        this.sendWelcome(p, fromId, msg.mode === 'zombie' ? 'zombie' : 'defusal');
+      }
+      return;
+    }
     const mode = msg.mode === 'zombie' ? 'zombie' : 'defusal';
     const teamPref = msg.team === 'ct' || msg.team === 't' ? msg.team : 'random';
     const name = String(msg.name || '战士').slice(0, 16).trim() || '战士';
@@ -122,26 +136,30 @@ export class Host {
     this.peerToPlayer.set(fromId, p.id);
     // 注册到 room.connections：Room.broadcast/sendTo 统一从这里取 sendFn 发送
     room.connections.set(p.id, (json) => this.sendRaw(fromId, JSON.parse(json)));
-    room.sendTo(p.id, {
+    this.sendWelcome(p, fromId, mode);
+    room.broadcast({ type: 'player_joined', id: p.id, name });
+    room.spawnJoiner(p);
+  }
+
+  // 下发 welcome + 选枪目录（含 Mod 注册的主武器）
+  sendWelcome(p, fromId, mode) {
+    this.room.sendTo(p.id, {
       type: 'welcome',
       id: p.id,
       mode,
-      map: room.mapId,
-      mapName: room.map.name,
+      map: this.room.mapId,
+      mapName: this.room.map.name,
       modeLabel: MODE_LABEL[mode],
       tickRate: 30,
-      mods: (room.modResults.loaded || []).map((m) => m.id),
+      mods: (this.room.modResults.loaded || []).map((m) => m.id),
     });
-    // 选枪目录（含 Mod 注册的主武器）：携带完整 def，客户端据此渲染/开火/命名
-    room.sendTo(p.id, {
+    this.room.sendTo(p.id, {
       type: 'weapon_catalog',
-      items: [...room.weapons.values()]
+      items: [...this.room.weapons.values()]
         .filter((d) => d.slot === 2)
         .map((d) => ({ id: d.id, name: d.name, cost: weaponPrice(d), def: d })),
       equipped: p.weapons.get(2)?.def.id ?? null,
     });
-    room.broadcast({ type: 'player_joined', id: p.id, name });
-    room.spawnJoiner(p);
   }
 
   handleInput(msg, fromId) {

@@ -157,17 +157,18 @@ body {
 }
 .touch-btn { display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 2px solid rgba(255,255,255,.55); color: #fff; font-size: 12px; text-shadow: 0 1px 3px #000; background: rgba(20,40,28,.55); }
 .btn-label { pointer-events: none; }
-#fire-btn { width: 76px; height: 130px; border-radius: 38px; background: rgba(220,60,60,.5); border-color: rgba(255,120,120,.8); right: 0; bottom: 0; font-size: 16px; }
-#chat-btn { width: 56px; height: 56px; background: rgba(90,180,150,.5); right: 0; bottom: 190px; }
-#use-btn { width: 56px; height: 56px; background: rgba(230,190,80,.5); right: 90px; bottom: 190px; }
-#grenade-btn { width: 56px; height: 56px; background: rgba(190,110,90,.5); right: 160px; bottom: 190px; }
-#score-btn { width: 56px; height: 56px; background: rgba(140,140,190,.5); right: 226px; bottom: 190px; }
+/* 布局：底行=开火/跳/蹲/切枪；中行=换弹/开镜/互动/雷；顶行=计分/聊天（均相对右下角簇） */
+#fire-btn { width: 76px; height: 120px; border-radius: 38px; background: rgba(220,60,60,.5); border-color: rgba(255,120,120,.8); right: 0; bottom: 0; font-size: 16px; }
 #jump-btn { width: 60px; height: 60px; background: rgba(80,160,110,.45); right: 90px; bottom: 0; }
-#ads-btn { width: 56px; height: 56px; background: rgba(80,120,180,.5); right: 160px; bottom: 0; }
-#crouch-btn { width: 56px; height: 56px; background: rgba(150,110,60,.5); right: 226px; bottom: 0; }
-#reload-btn { width: 56px; height: 56px; background: rgba(150,110,60,.5); right: 90px; bottom: 70px; }
-#switch-btn { width: 56px; height: 56px; background: rgba(90,150,190,.5); right: 160px; bottom: 70px; }
-#shop-btn { width: 56px; height: 56px; background: rgba(255,200,80,.55); right: 226px; bottom: 70px; }
+#crouch-btn { width: 56px; height: 56px; background: rgba(150,110,60,.5); right: 160px; bottom: 0; }
+#switch-btn { width: 56px; height: 56px; background: rgba(90,150,190,.5); right: 226px; bottom: 0; }
+#reload-btn { width: 56px; height: 56px; background: rgba(150,110,60,.5); right: 0; bottom: 140px; }
+#ads-btn { width: 56px; height: 56px; background: rgba(80,120,180,.5); right: 90px; bottom: 140px; }
+#use-btn { width: 56px; height: 56px; background: rgba(230,190,80,.5); right: 160px; bottom: 140px; }
+#grenade-btn { width: 56px; height: 56px; background: rgba(190,110,90,.5); right: 226px; bottom: 140px; }
+#score-btn { width: 56px; height: 56px; background: rgba(140,140,190,.5); right: 160px; bottom: 200px; }
+#chat-btn { width: 56px; height: 56px; background: rgba(90,180,150,.5); right: 226px; bottom: 200px; }
+#shop-btn { width: 56px; height: 56px; background: rgba(255,200,80,.55); right: 90px; bottom: 200px; }
 .touch-btn.pressed { transform: scale(0.9); filter: brightness(1.45); }
 /* 暂停时禁用触控层：让暂停面板/退出按钮可点击（look-zone 默认盖住整屏） */
 #touch-ui.touch-disabled .zone { pointer-events: none; }

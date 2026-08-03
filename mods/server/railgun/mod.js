@@ -29,6 +29,7 @@ export default {
       sound: 'sniper',
       cost: 1200,
       railgun: true,
+      pierce: true, // 磁轨弹贯穿直线上的多个目标
     };
     ctx.registerWeapon(def);
 

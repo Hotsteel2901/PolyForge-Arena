@@ -1,6 +1,6 @@
 // 房间：固定步长模拟、模式编排、输入处理、武器/投掷物/快照/事件总线。
 
-import { TICK_RATE, TICK_MS, SNAPSHOT_INTERVAL_MS, TEAM, S2C, EVENT, PHYS, MODE } from '../shared/constants.js';
+import { TICK_RATE, TICK_MS, SNAPSHOT_INTERVAL_MS, TEAM, S2C, EVENT, PHYS, MODE, FINALE, HEALTH_BOX_HEAL } from '../shared/constants.js';
 import { BUILTIN_WEAPONS, WeaponRuntime, shouldFire } from '../shared/weapons.js';
 import { PRICES, START_MONEY, MONEY_CAP, WIN_REWARD, LOSS_REWARD, PLANT_REWARD, DEFUSE_REWARD, costOf, ZOMBIE_START_MONEY, weaponPrice } from '../shared/economy.js';
 import { MAPS } from '../shared/maps/index.js';
@@ -34,7 +34,10 @@ export class Room {
     this.projectiles = [];
     this.nextProjId = 1;
     this.ammoBoxes = (this.map.ammoBoxes || []).map((b) => ({ ...b, available: true, respawnAt: 0 }));
+    this.healthBoxes = (this.map.healthBoxes || []).map((b) => ({ ...b, available: true, respawnAt: 0 }));
     this.bomb = { planted: false, carried: false, carrierId: null, pos: null, timeLeft: 0 };
+    this.finaleActive = false;
+    this.noRespawn = false;
     this.core = null;
     this.roundNum = 0;
     this.matchScore = { CT: 0, T: 0, HUMAN: 0, ZOMBIE: 0 };
@@ -211,13 +214,22 @@ export class Room {
     this.state = 'live';
     this.phase = 'live';
     this.buyUntil = 0;
+    this.finaleActive = false;
+    this.noRespawn = false;
     const all = [...this.players.values()];
     for (const p of all) {
       p.boughtPhase = false;
       p.bombCarrier = false;
+      p.damageMult = 1;
+      p.isCrystalHunter = false;
+      p.isZombieKing = false;
+      p.isZombieServant = false;
     }
 
     if (this.mode === MODE.DEFUSAL) {
+      // 记录上一回合是否存活（进入购买阶段时不会复活，round_start 前 alive 即存活状态）
+      const survived = new Map();
+      for (const p of all) survived.set(p.id, p.alive);
       const players = all.filter((p) => !p.isBot || true);
       players.forEach((p) => {
         p.isZombie = false;
@@ -234,13 +246,18 @@ export class Room {
           else tCount += 1;
         }
       }
-      this.spawnAll();
-      // 购买阶段购买的装备带入本回合，然后清空购买记录（下一购买阶段重新购买）
+      // 装备结算：存活者保留上局装备并补满弹药、继承护甲；阵亡者回基础装备（手持手枪）
+      for (const p of all) {
+        if (survived.get(p.id)) this.refillAmmo(p);
+      }
+      this.spawnAll({ keepLoadout: (p) => survived.get(p.id) });
+      // 购买阶段购买的装备带入本回合（覆盖/补充到装备栏），然后清空购买记录
       for (const p of all) {
         for (const rec of p.boughtItems) {
-          if (rec.slot !== undefined && p.weapons.has(rec.slot)) {
-            rec.runtime.reset(0); // 跨局复用必须重置时间状态，否则打不出伤害
+          if (rec.slot !== undefined) {
+            rec.runtime.reset(0);
             p.weapons.set(rec.slot, rec.runtime);
+            if (rec.slot === 2) p.activeSlot = 2;
           }
           else if (rec.item === 'armor') p.armor = 100;
           else if (rec.item === 'grenade') p.grenadeCount = Math.min(5, p.grenadeCount + 1);
@@ -262,6 +279,7 @@ export class Room {
         p.team = TEAM.HUMAN;
         p.money = ZOMBIE_START_MONEY; // 生化模式：开局每人 1000
         p.zombieMoneyInit = true;
+        p.zombieSince = 0;
       });
       const zombieCount = Math.max(1, Math.min(3, Math.floor(all.length * 0.2), all.length));
       const pool = [...all].sort(() => Math.random() - 0.5);
@@ -271,7 +289,7 @@ export class Room {
       }
       this.spawnAll();
       this.core = new ZombieMatch({
-        duration: 420,
+        duration: 300,
         onEvent: (e) => this.handleRoundEvent(e),
       });
       const humans = [...all].filter((p) => !p.isZombie);
@@ -319,11 +337,21 @@ export class Room {
     return spots[order[0]];
   }
 
-  spawnAll() {
+  spawnAll(opts = {}) {
     for (const p of this.players.values()) {
       const teamKey = p.isZombie ? 'ZOMBIE' : p.team === TEAM.CT ? 'CT' : p.team === TEAM.T ? 'T' : 'HUMAN';
       const spot = this.pickSpawn(teamKey);
-      spawnPlayer(this, p, p.team, spot);
+      const keep = typeof opts.keepLoadout === 'function' ? !!opts.keepLoadout(p) : !!opts.keepLoadout;
+      spawnPlayer(this, p, p.team, spot, { keepLoadout: keep });
+    }
+  }
+
+  // 把玩家所有武器的弹药补满并重置时间状态（存活者跨局保留时使用）
+  refillAmmo(p) {
+    for (const w of p.weapons.values()) {
+      w.reset(0);
+      if (Number.isFinite(w.def.magSize)) w.ammo = w.def.magSize;
+      if (Number.isFinite(w.def.reserve)) w.reserve = w.def.reserve;
     }
   }
 
@@ -350,7 +378,12 @@ export class Room {
         }
       } else {
         const matchWinner = e.winner;
-        this.matchScore[winner] += 1;
+        if (e.winner === 'DRAW') {
+          this.matchScore.HUMAN += 1;
+          this.matchScore.ZOMBIE += 1;
+        } else {
+          this.matchScore[e.winner] += 1;
+        }
         this.broadcast({ type: 'round_end', winner, reason: e.reason, round: this.roundNum, scores: this.matchScore, matchWinner });
         this.matchEndAt = this.time + 8;
         this.roundEndAt = this.time + 5;
@@ -368,6 +401,57 @@ export class Room {
     } else if (e.type === 'bomb_defused') {
       this.broadcast({ type: 'bomb_defused', pos: this.bomb.pos });
     }
+  }
+
+  // ---------- 琉璃决战（生化模式最后 60 秒） ----------
+  activateFinale() {
+    const players = [...this.players.values()];
+    const humans = players.filter((p) => p.alive && !p.isZombie);
+    const zombies = players
+      .filter((p) => p.alive && p.isZombie)
+      .sort((a, b) => (a.zombieSince ?? 1e9) - (b.zombieSince ?? 1e9));
+    // 所有存活人类 → 琉璃猎人
+    for (const h of humans) {
+      h.isCrystalHunter = true;
+      h.hp = h.maxHp = FINALE.HUNTER_HP;
+      h.armor = FINALE.HUNTER_ARMOR;
+      h.damageMult = FINALE.HUNTER_DAMAGE;
+      this.refillAmmo(h);
+    }
+    let king = null;
+    let servants = 0;
+    if (zombies.length) {
+      // 最初始的丧尸 → 尸王
+      king = zombies[0];
+      king.isZombieKing = true;
+      king.hp = king.maxHp = FINALE.KING_HP;
+      king.armor = FINALE.KING_ARMOR;
+      king.damageMult = FINALE.KING_DAMAGE;
+      // 其余随机 3 只 → 尸仆
+      const rest = zombies.slice(1).sort(() => Math.random() - 0.5);
+      const servantCount = Math.min(3, rest.length);
+      for (let i = 0; i < servantCount; i++) {
+        const s = rest[i];
+        s.isZombieServant = true;
+        s.hp = s.maxHp = FINALE.SERVANT_HP;
+        s.armor = FINALE.SERVANT_ARMOR;
+        s.damageMult = FINALE.SERVANT_DAMAGE;
+        servants += 1;
+      }
+      // 其余丧尸仅小幅提升血量
+      for (const z of zombies) {
+        if (z.isZombieKing || z.isZombieServant) continue;
+        z.hp = z.maxHp = Math.ceil(z.maxHp * FINALE.ZOMBIE_HP_MULT);
+        z.damageMult = 1;
+      }
+    }
+    this.broadcast({ type: 'finale_start', hunters: humans.length, king: king?.name, servants });
+    this.say(
+      `琉璃之力觉醒！${humans.length} 名人类化为琉璃猎人` +
+      (king ? `，${king.name} 化为尸王` : '') +
+      (servants ? `，${servants} 只尸仆觉醒` : '') +
+      `！最后 ${FINALE.DURATION} 秒不死不休，死亡不再复活！`
+    );
   }
 
   // ---------- 主循环 ----------
@@ -394,7 +478,7 @@ export class Room {
 
     for (const p of this.players.values()) {
       if (!p.alive) {
-        if (p.respawnAt && this.time >= p.respawnAt && this.mode === MODE.ZOMBIE) {
+        if (p.respawnAt && this.time >= p.respawnAt && this.mode === MODE.ZOMBIE && !this.noRespawn) {
           respawnZombie(this, p);
         }
         continue;
@@ -433,15 +517,29 @@ export class Room {
       }
     }
     if (this.mode === MODE.ZOMBIE && this.core?.state === 'live') {
-      const aliveHuman = [...this.players.values()].some((p) => p.alive && !p.isZombie);
-      if (!aliveHuman) this.core.end('ZOMBIE', 'infected_all');
-      const zombies = [...this.players.values()].filter((p) => p.alive && p.isZombie);
-      if (zombies.length === 0) {
-        const humans = [...this.players.values()].filter((p) => p.alive && !p.isZombie);
-        if (humans.length > 0) {
-          const pick = humans[Math.floor(Math.random() * humans.length)];
+      const aliveHuman = [...this.players.values()].filter((p) => p.alive && !p.isZombie);
+      const aliveZombie = [...this.players.values()].filter((p) => p.alive && p.isZombie);
+      // 最后 60 秒：琉璃决战激活（全员变身、不再复活）
+      if (!this.finaleActive && this.core.timeLeft <= FINALE.DURATION) {
+        this.finaleActive = true;
+        this.noRespawn = true;
+        if (aliveHuman.length > 0 || aliveZombie.length > 0) this.activateFinale();
+      }
+      if (this.finaleActive) {
+        if (aliveZombie.length === 0 && aliveHuman.length === 0) {
+          this.core.end('DRAW', 'mutual_annihilation');
+        } else if (aliveZombie.length === 0) {
+          this.core.end('HUMAN', 'zombies_eliminated');
+        } else if (aliveHuman.length === 0) {
+          this.core.end('ZOMBIE', 'infected_all');
+        }
+      } else {
+        if (aliveHuman.length === 0) this.core.end('ZOMBIE', 'infected_all');
+        if (aliveZombie.length === 0 && aliveHuman.length > 0) {
+          const pick = aliveHuman[Math.floor(Math.random() * aliveHuman.length)];
           pick.isZombie = true;
           pick.team = TEAM.ZOMBIE;
+          pick.zombieSince = this.time;
           pick.hp = PHYS.ZOMBIE_HP;
           pick.maxHp = PHYS.ZOMBIE_HP;
           pick.armor = 0;
@@ -468,9 +566,16 @@ export class Room {
     const slotBefore = p.activeSlot;
     // 边沿动作从累加器消费（人类输入可能被后续帧覆盖，tick 前不能只看最新状态）
     const edge = p.edge;
-    if (Number.isInteger(edge.sw) && edge.sw >= 0 && p.weapons.has(edge.sw)) {
-      p.activeSlot = edge.sw;
-      p.useProgress = 0;
+    if (Number.isInteger(edge.sw) && edge.sw >= 0) {
+      if (p.weapons.has(edge.sw)) {
+        p.activeSlot = edge.sw;
+        p.useProgress = 0;
+      } else {
+        // 无效切枪（如无主武器时按 2）：立即回执当前武器，避免客户端乐观切枪后闪回
+        const cur = p.weapons.get(p.activeSlot);
+        p.switchSeq += 1;
+        this.sendTo(p.id, { type: 'switch', w: cur?.def.id ?? '', slot: p.activeSlot, seq: p.switchSeq });
+      }
     }
     if (edge.swd) {
       const slots = [...p.weapons.keys()].sort((a, b) => a - b);
@@ -634,6 +739,18 @@ export class Room {
           this.broadcast({ type: 'ammo_box', id: p.id, pos: box.pos });
         }
       }
+      // 回血箱：人类接近按住 E 回复生命
+      if (p.hp < p.maxHp) {
+        const hb = this.healthBoxes.find((b) => b.available && Math.hypot(b.pos.x - p.pos.x, b.pos.z - p.pos.z) < 2);
+        if (hb) {
+          const before = p.hp;
+          p.hp = Math.min(p.maxHp, p.hp + HEALTH_BOX_HEAL);
+          hb.available = false;
+          hb.respawnAt = this.time + hb.respawn;
+          this.sendTo(p.id, { type: 'health_refill', hp: Math.ceil(p.hp) });
+          this.broadcast({ type: 'health_box', id: p.id, pos: hb.pos, amount: Math.round(p.hp - before) });
+        }
+      }
     }
   }
 
@@ -708,6 +825,9 @@ export class Room {
     for (const b of this.ammoBoxes) {
       if (!b.available && this.time >= b.respawnAt) b.available = true;
     }
+    for (const b of this.healthBoxes) {
+      if (!b.available && this.time >= b.respawnAt) b.available = true;
+    }
   }
 
   // ---------- 经济 / 购买 ----------
@@ -762,8 +882,14 @@ export class Room {
   }
 
   autoBuy(bot) {
-    if (bot.money >= PRICES.arc17 && !bot.weapons.has(2)) return this.handleBuy(bot, 'arc17');
-    if (bot.money >= PRICES.armor && bot.armor < 50) return this.handleBuy(bot, 'armor');
+    // 先买买得起的主武器（优先更好更贵的），没主武器才买
+    if (!bot.weapons.has(2)) {
+      const order = ['longshot', 'bruiser', 'arc17', 'warden', 'vx9'];
+      for (const id of order) {
+        if (bot.money >= PRICES[id]) return this.handleBuy(bot, id);
+      }
+    }
+    if (bot.money >= PRICES.armor && bot.armor < 60) return this.handleBuy(bot, 'armor');
     if (bot.money >= PRICES.grenade && bot.grenadeCount < 2) return this.handleBuy(bot, 'grenade');
     return { ok: false };
   }
@@ -803,6 +929,7 @@ export class Room {
     this.mapId = this.rotation[this.rotationIdx];
     this.map = MAPS[this.mapId];
     this.ammoBoxes = (this.map.ammoBoxes || []).map((b) => ({ ...b, available: true, respawnAt: 0 }));
+    this.healthBoxes = (this.map.healthBoxes || []).map((b) => ({ ...b, available: true, respawnAt: 0 }));
     this.broadcast({ type: 'map_change', map: this.mapId, mapName: this.map.name });
     this.log(`next map: ${this.mapId}`);
   }
@@ -818,7 +945,9 @@ export class Room {
         t: p.team,
         zb: p.isZombie ? 1 : 0,
         h: Math.max(0, Math.ceil(p.hp)),
+        mx: Math.max(1, Math.ceil(p.maxHp)),
         a: Math.max(0, Math.ceil(p.armor)),
+        ft: p.isCrystalHunter ? 1 : p.isZombieKing ? 2 : p.isZombieServant ? 3 : 0,
         x: +p.pos.x.toFixed(2),
         y: +p.pos.y.toFixed(2),
         z: +p.pos.z.toFixed(2),

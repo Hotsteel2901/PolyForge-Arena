@@ -50,6 +50,13 @@ export default {
     { pos: { x: -14, z: 0 }, respawn: 20 },
     { pos: { x: 14, z: 0 }, respawn: 20 },
   ],
+  healthBoxes: [
+    { pos: { x: -18, z: -18 }, respawn: 25 },
+    { pos: { x: -18, z: 18 }, respawn: 25 },
+    { pos: { x: 18, z: -18 }, respawn: 25 },
+    { pos: { x: 18, z: 18 }, respawn: 25 },
+    { pos: { x: 0, z: 0 }, respawn: 25 },
+  ],
   colliders: [
     // 边界
     W(-28, -28, 28, -27, 5),

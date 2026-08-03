@@ -1,6 +1,6 @@
 // 服务器玩家对象：创建、装备、生成、受伤、死亡。
 
-import { PHYS, TEAM } from '../shared/constants.js';
+import { PHYS, TEAM, FINALE } from '../shared/constants.js';
 import { WeaponRuntime, BUILTIN_WEAPONS } from '../shared/weapons.js';
 import { applyArmor } from '../shared/math.js';
 import { PositionHistory } from './history.js';
@@ -49,6 +49,11 @@ export function createPlayer(id, name, { isBot = false } = {}) {
     slowTicks: 0,
     selectedPrimary: null, // 生化模式选枪：重生后仍保持所选主武器
     zombieMoneyInit: false,
+    zombieSince: 0,          // 成为僵尸的时刻（用于“最初始的丧尸”选尸王）
+    damageMult: 1,           // 伤害倍率（琉璃猎人 / 尸王 / 尸仆）
+    isCrystalHunter: false,
+    isZombieKing: false,
+    isZombieServant: false,
   };
 }
 
@@ -65,14 +70,20 @@ export function giveLoadout(p, mode, team) {
   }
   p.weapons.set(0, new WeaponRuntime(BUILTIN_WEAPONS.fang));
   p.weapons.set(1, new WeaponRuntime(BUILTIN_WEAPONS.k9));
-  const primary = mode === 'defusal' ? (team === TEAM.T ? BUILTIN_WEAPONS.arc17 : BUILTIN_WEAPONS.vx9) : BUILTIN_WEAPONS.arc17;
-  p.weapons.set(2, new WeaponRuntime(primary));
   p.weapons.set(3, new WeaponRuntime(BUILTIN_WEAPONS.thunder));
-  p.grenadeCount = 3;
-  p.activeSlot = 2;
+  if (mode === 'defusal') {
+    // 拆弹模式开局：只持手枪（无免费主武器），主武器通过购买获得
+    p.grenadeCount = 1;
+    p.activeSlot = 1; // 刚进房间 / 刚创建房间时手持手枪
+  } else {
+    const primary = mode === 'defusal' ? (team === TEAM.T ? BUILTIN_WEAPONS.arc17 : BUILTIN_WEAPONS.vx9) : BUILTIN_WEAPONS.arc17;
+    p.weapons.set(2, new WeaponRuntime(primary));
+    p.grenadeCount = 3;
+    p.activeSlot = 2;
+  }
 }
 
-export function spawnPlayer(room, p, team, spawn) {
+export function spawnPlayer(room, p, team, spawn, opts = {}) {
   p.team = team;
   p.alive = true;
   p.pos = { x: spawn.x, y: spawn.y ?? 0.05, z: spawn.z };
@@ -83,12 +94,18 @@ export function spawnPlayer(room, p, team, spawn) {
   p.crouch = false;
   p.hp = p.isZombie ? PHYS.ZOMBIE_HP : 100;
   p.maxHp = p.isZombie ? PHYS.ZOMBIE_HP : 100;
-  p.armor = p.isZombie ? 0 : 50;
+  if (opts.keepLoadout) {
+    // 存活者保留上局装备与护甲，仅重置生命
+    p.useProgress = 0;
+    p.useTarget = null;
+  } else {
+    p.armor = p.isZombie ? 0 : 50;
+    giveLoadout(p, room.mode, team);
+  }
   p.lastHitAt = -99;
   p.respawnAt = 0;
   p.useProgress = 0;
   p.useTarget = null;
-  giveLoadout(p, room.mode, team);
   // 触发 mod 钩子（可能替换主武器，如 energy-rifle mod 默认替换），随后再应用玩家选枪的武器，
   // 保证生化模式买的枪在重生后不被 mod 覆盖
   room.emit('player_spawn', { player: p });
@@ -103,6 +120,13 @@ export function spawnPlayer(room, p, team, spawn) {
       p.weapons.set(2, new WeaponRuntime(room.weapons.get(p.selectedPrimary)));
       p.activeSlot = 2;
     }
+    // 琉璃决战期间新加入/重生的人类直接成为琉璃猎人
+    if (room.finaleActive && !p.isZombie) {
+      p.isCrystalHunter = true;
+      p.hp = p.maxHp = FINALE.HUNTER_HP;
+      p.armor = FINALE.HUNTER_ARMOR;
+      p.damageMult = FINALE.HUNTER_DAMAGE;
+    }
   }
 }
 
@@ -111,7 +135,9 @@ export function damagePlayer(room, shooter, victim, amount, info = {}) {
   // 友伤拦截：同队伤害直接忽略（含手雷等范围伤害）
   if (shooter && shooter !== victim && shooter.team === victim.team) return null;
   if (victim.isZombie) victim.slowTicks = PHYS.ZOMBIE_SLOW_TICKS;
-  const { damage, armor } = applyArmor(amount, victim.armor);
+  // 变身倍率（琉璃猎人 / 尸王 / 尸仆 的伤害加成）
+  const mult = shooter && shooter !== victim ? (shooter.damageMult ?? 1) : 1;
+  const { damage, armor } = applyArmor(Math.round(amount * mult), victim.armor);
   victim.hp -= damage;
   victim.armor = armor;
   victim.lastHitAt = room.time;
@@ -157,9 +183,13 @@ export function killPlayer(room, killer, victim, info = {}) {
   room.broadcast(event);
 
   if (room.mode === 'zombie') {
-    if (!victim.isZombie) {
+    if (room.noRespawn) {
+      // 琉璃决战阶段：所有实体死亡后均不能复活 / 感染
+      victim.respawnAt = 0;
+    } else if (!victim.isZombie) {
       victim.isZombie = true;
       victim.team = TEAM.ZOMBIE;
+      victim.zombieSince = room.time;
       victim.respawnAt = room.time + 3.5;
       room.core?.infect(victim.id);
       room.broadcast({ type: 'infected', id: victim.id });

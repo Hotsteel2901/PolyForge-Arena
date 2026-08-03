@@ -315,6 +315,21 @@ export function buildAmmoBox() {
   return g;
 }
 
+export function buildHealthBox() {
+  const g = new THREE.Group();
+  const m = new THREE.Mesh(
+    new THREE.BoxGeometry(0.8, 0.5, 0.6),
+    new THREE.MeshStandardMaterial({ color: 0x2fbf71, roughness: 0.6, emissive: 0x0c5c2e, emissiveIntensity: 0.35 })
+  );
+  m.position.y = 0.25;
+  m.castShadow = true;
+  g.add(m);
+  const cross = add(g, B(0.3, 0.12, 0.03), mat(0xf4faf6), 0, 0.3, 0.32);
+  add(g, B(0.12, 0.3, 0.03), mat(0xf4faf6), 0, 0.3, 0.32);
+  g.userData.pulse = cross;
+  return g;
+}
+
 export function buildSiteRing(color, radius = 2.6) {
   const g = new THREE.Group();
   const ring = new THREE.Mesh(
@@ -352,7 +367,8 @@ export function buildLightGlow(color) {
 }
 
 // 玩家头顶名牌 + 血条（Canvas 贴图，血量变化时重绘）；carrier=true 时绘制炸弹携带标记
-export function buildNameTag(name, hp, maxHp, zombie = false, team = 0, carrier = false) {
+// ft：0=普通，1=琉璃猎人，2=尸王，3=尸仆
+export function buildNameTag(name, hp, maxHp, zombie = false, team = 0, carrier = false, ft = 0) {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 96;
@@ -360,7 +376,7 @@ export function buildNameTag(name, hp, maxHp, zombie = false, team = 0, carrier 
   const tex = new THREE.CanvasTexture(canvas);
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true }));
   sprite.scale.set(1.9, 0.7, 1);
-  sprite.userData = { name, hp, maxHp, zombie, team, carrier, redraw() {
+  sprite.userData = { name, hp, maxHp, zombie, team, carrier, ft, redraw() {
     ctx.clearRect(0, 0, 256, 96);
     const d = sprite.userData;
     if (d.carrier) {
@@ -378,13 +394,21 @@ export function buildNameTag(name, hp, maxHp, zombie = false, team = 0, carrier 
     ctx.lineWidth = 4;
     ctx.strokeStyle = 'rgba(0,0,0,.85)';
     ctx.strokeText(d.name, 128, 42);
-    ctx.fillStyle = d.zombie ? '#ffb0a0' : d.team === 1 ? '#cfe4ff' : d.team === 2 ? '#ffe0c2' : '#e8f2ea';
+    let nameColor = d.zombie ? '#ffb0a0' : d.team === 1 ? '#cfe4ff' : d.team === 2 ? '#ffe0c2' : '#e8f2ea';
+    if (d.ft === 1) nameColor = '#7dffd8'; // 琉璃猎人
+    else if (d.ft === 2) nameColor = '#d9a0ff'; // 尸王
+    else if (d.ft === 3) nameColor = '#b6ff9a'; // 尸仆
+    ctx.fillStyle = nameColor;
     ctx.fillText(d.name, 128, 42);
     const w = 180, h = 13, x = 38, y = 60;
     ctx.fillStyle = 'rgba(0,0,0,.65)';
     ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
     const pct = Math.max(0, Math.min(1, d.hp / Math.max(1, d.maxHp)));
-    ctx.fillStyle = d.zombie ? '#e74c3c' : d.team === 1 ? '#3d9bff' : d.team === 2 ? '#ffa13d' : '#3ddc63';
+    let barColor = d.zombie ? '#e74c3c' : d.team === 1 ? '#3d9bff' : d.team === 2 ? '#ffa13d' : '#3ddc63';
+    if (d.ft === 1) barColor = '#38e0b0';
+    else if (d.ft === 2) barColor = '#b45cff';
+    else if (d.ft === 3) barColor = '#8aff6b';
+    ctx.fillStyle = barColor;
     ctx.fillRect(x, y, w * pct, h);
     ctx.strokeStyle = 'rgba(255,255,255,.55)';
     ctx.strokeRect(x, y, w, h);

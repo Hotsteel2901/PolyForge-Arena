@@ -1,7 +1,7 @@
-// 简单 Bot：导航点寻路 + 索敌交火 + 目标行为（安放/拆除/追击/逃窜）。
+// Bot：BFS 导航寻路 + 索敌交火 + 目标行为（安放/拆除/拾取/追逃/回血）。
 
 import { TEAM } from '../shared/constants.js';
-import { distance, directionFromAngles } from '../shared/math.js';
+import { distance, angLerp } from '../shared/math.js';
 import { traceWorld } from './hitscan.js';
 
 export function createBotBrain() {
@@ -17,6 +17,9 @@ export function createBotBrain() {
     burstUntil: 0,
     lastNodes: [],
     target: null,
+    aimErrX: 0,       // 瞄准误差（持续小漂移，避免“锁头”死锁）
+    aimErrY: 0,
+    aimRefreshAt: 0,
   };
 }
 
@@ -57,7 +60,10 @@ export function tickBot(room, bot) {
       if (b.stuckFor > 2.6) {
         b.stuckFor = 0;
         input.j = 1;
-        bot.yaw += (Math.random() - 0.5) * 1.6;
+        // 解锁：朝向目标方向（而非随机转向），减少贴墙空转
+        const way = b.nextNode || b.goal;
+        if (way) bot.yaw = Math.atan2(-(way.x - bot.pos.x), -(way.z - bot.pos.z));
+        else bot.yaw += (Math.random() - 0.5) * 1.2;
         b.path = [];
         b.nextNode = null;
         b.decideAt = 0;
@@ -77,7 +83,7 @@ export function tickBot(room, bot) {
     b.decideAt = now + 1.2 + Math.random() * 1.2;
     b.target = enemy;
     const prevGoal = b.goal;
-    // 目标粘滞：拆弹模式选定点位后一路走到；CT 在炸弹安放后改去拆弹；T 在有实体炸弹时先去拾取
+    // 目标粘滞：拆弹模式选定点位后一路走到；CT 在炸弹安放后改去拆弹；T 有实体炸弹时优先去拾取
     if (room.mode === 'defusal') {
       const bombPlanted = room.core?.bombPlanted && room.bomb?.pos;
       const needPickup = bot.team === TEAM.T && !bot.bombCarrier && room.bomb && !room.bomb.planted && room.bomb.pos;
@@ -85,6 +91,7 @@ export function tickBot(room, bot) {
         b.goal = { x: room.bomb.pos.x, z: room.bomb.pos.z, y: room.bomb.pos.y ?? 0 };
         b.bombGoal = true;
       } else if (needPickup) {
+        // 持弹者死亡掉弹后，T 机器人必须始终优先去捡（覆盖已粘滞的点位目标）
         b.goal = { x: room.bomb.pos.x, z: room.bomb.pos.z, y: room.bomb.pos.y ?? 0 };
         b.bombGoal = true;
       } else if (!b.goal || b.bombGoal) {
@@ -146,9 +153,15 @@ function findEnemy(room, bot) {
 }
 
 function hasLOS(room, from, to) {
-  const fwd = directionFromAngles(from.yaw, from.pitch);
+  // 直接朝敌人方向做视线检测（不依赖当前朝向），避免 Bot 明明看得到却不开火
+  const origin = { x: from.pos.x, y: from.pos.y + 1.55, z: from.pos.z };
+  const dx = to.pos.x - origin.x;
+  const dy = to.pos.y + 1.3 - origin.y;
+  const dz = to.pos.z - origin.z;
+  const len = Math.hypot(dx, dy, dz) || 1;
+  const dir = { x: dx / len, y: dy / len, z: dz / len };
   const max = distance(from.pos, to.pos);
-  const t = traceWorld(room.map, { x: from.pos.x, y: from.pos.y + 1.55, z: from.pos.z }, fwd, max);
+  const t = traceWorld(room.map, origin, dir, max);
   return t >= max - 0.3;
 }
 
@@ -168,6 +181,22 @@ function chooseGoal(room, bot) {
     const site = room.map.sites[Math.random() < 0.5 ? 0 : 1];
     return { x: site.pos.x, z: site.pos.z, y: site.pos.y ?? 0, site };
   }
+  if (!bot.isZombie && bot.hp < bot.maxHp * 0.5) {
+    // 人类血量过低：优先去最近的可用回血箱
+    const avail = (room.healthBoxes || []).filter((b) => b.available);
+    if (avail.length) {
+      let best = avail[0];
+      let bestD = Infinity;
+      for (const b of avail) {
+        const d = distance(bot.pos, { x: b.pos.x, y: 0, z: b.pos.z });
+        if (d < bestD) {
+          bestD = d;
+          best = b;
+        }
+      }
+      return { x: best.pos.x, z: best.pos.z, y: best.pos.y ?? 0 };
+    }
+  }
   if (bot.isZombie) {
     const human = [...room.players.values()].find((p) => p.alive && !p.isZombie);
     return human ? { x: human.pos.x, z: human.pos.z, y: human.pos.y } : { x: 0, z: 0, y: 0 };
@@ -185,54 +214,59 @@ function navDist(a, b) {
   return Math.hypot(a.x - b.x, a.z - b.z) + Math.abs((a.y ?? 0) - (b.y ?? 0)) * 2;
 }
 
+function nearestNav(nav, pos) {
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < nav.length; i++) {
+    const d = navDist(nav[i], { x: pos.x, y: pos.y ?? 0, z: pos.z });
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+// Dijkstra 最短路（导航图很小，线性取最小距离即可）。沿走廊走，不再贪心斜穿墙体。
 function planPath(map, bot, goal) {
   if (!goal) return [];
   const nav = map.nav;
   if (!nav.length) return [];
-  let start = 0;
-  let startD = Infinity;
-  for (let i = 0; i < nav.length; i++) {
-    const d = navDist(nav[i], { x: bot.pos.x, y: bot.pos.y, z: bot.pos.z });
-    if (d < startD) {
-      startD = d;
-      start = i;
-    }
-  }
-  let goalIdx = start;
-  let goalD = Infinity;
-  for (let i = 0; i < nav.length; i++) {
-    const d = navDist(nav[i], goal);
-    if (d < goalD) {
-      goalD = d;
-      goalIdx = i;
-    }
-  }
+  const start = nearestNav(nav, bot.pos);
+  const goalIdx = nearestNav(nav, goal);
   if (start === goalIdx) return [nav[start]];
-  // 贪心：每次选择离目标最近的未访问邻居（带随机扰动避免死循环）。
-  // 路径包含起点节点：先退回到最近的导航点，再沿图前进（避免从任意位置斜穿墙体）。
-  const path = [nav[start]];
-  const visited = new Set([start]);
-  let cur = start;
-  for (let step = 0; step < 24; step++) {
-    const node = nav[cur];
-    let next = -1;
+  const dist = new Array(nav.length).fill(Infinity);
+  const prev = new Array(nav.length).fill(-1);
+  const visited = new Array(nav.length).fill(false);
+  dist[start] = 0;
+  for (let it = 0; it < nav.length; it++) {
+    let u = -1;
     let best = Infinity;
-    const options = (node.links || []).slice();
-    // 加入随机扰动
-    for (const li of options) {
-      if (visited.has(li)) continue;
-      const d = navDist(nav[li], goal) + Math.random() * 3;
-      if (d < best) {
-        best = d;
-        next = li;
+    for (let i = 0; i < nav.length; i++) {
+      if (!visited[i] && dist[i] < best) {
+        best = dist[i];
+        u = i;
       }
     }
-    if (next === -1) break;
-    visited.add(next);
-    path.push(nav[next]);
-    cur = next;
-    if (cur === goalIdx) break;
+    if (u === -1) break;
+    visited[u] = true;
+    if (u === goalIdx) break;
+    for (const li of nav[u].links || []) {
+      const w = navDist(nav[u], nav[li]);
+      if (dist[u] + w < dist[li]) {
+        dist[li] = dist[u] + w;
+        prev[li] = u;
+      }
+    }
   }
+  if (dist[goalIdx] === Infinity) return [];
+  const path = [];
+  let cur = goalIdx;
+  while (cur !== start && cur !== -1) {
+    path.unshift(nav[cur]);
+    cur = prev[cur];
+  }
+  path.unshift(nav[start]);
   return path;
 }
 
@@ -249,14 +283,13 @@ function moveAlongPath(room, bot, b) {
     }
   }
   if (!waypoint) return;
-  // 需要上台阶时跳跃
-  const dy = (waypoint.y ?? 0) - bot.pos.y;
-  if (dy > 0.55 && Math.hypot(waypoint.x - bot.pos.x, waypoint.z - bot.pos.z) < 2.6) {
-    bot.input.j = 1;
-  }
   const dx = waypoint.x - bot.pos.x;
   const dz = waypoint.z - bot.pos.z;
-  const len = Math.hypot(dx, dz) || 1;
+  const dy = (waypoint.y ?? 0) - bot.pos.y;
+  const hDist = Math.hypot(dx, dz);
+  // 明显更高的平台（如箱子顶部）且靠近时才跳跃；台阶交给自动上台阶系统，不再随机乱跳
+  if (dy > 0.5 && hDist < 2.4 && dy < 2.2) bot.input.j = 1;
+  const len = hDist || 1;
   const tx = dx / len;
   const tz = dz / len;
   // 以 bot 朝向为前向量，换算成按键
@@ -271,7 +304,6 @@ function moveAlongPath(room, bot, b) {
   if (strafe > 0.2) inputSet(bot, 3, 1);
   else if (strafe < -0.2) inputSet(bot, 2, 1);
   bot.yaw = Math.atan2(-dx, -dz);
-  if (Math.random() < 0.02) bot.input.j = 1;
 }
 
 function inputSet(bot, idx, v) {
@@ -284,15 +316,12 @@ function engage(room, bot, enemy, distEnemy) {
   const w = bot.weapons.get(bot.activeSlot);
   const def = w?.def;
 
-  // 面向敌人（带误差）
-  const err = 0.02 + Math.random() * 0.1;
-  const dx = enemy.pos.x - bot.pos.x;
-  const dy = enemy.pos.y + 1.3 - (bot.pos.y + 1.55);
-  const dz = enemy.pos.z - bot.pos.z;
-  bot.yaw = Math.atan2(-dx, -dz) + (Math.random() - 0.5) * err * 6;
-  bot.pitch = Math.atan2(dy, Math.hypot(dx, dz)) + (Math.random() - 0.5) * err * 4;
-
   if (bot.isZombie) {
+    // 面向敌人直接追击
+    const dx = enemy.pos.x - bot.pos.x;
+    const dz = enemy.pos.z - bot.pos.z;
+    bot.yaw = Math.atan2(-dx, -dz);
+    bot.pitch = Math.atan2(enemy.pos.y + 1.2 - (bot.pos.y + 1.55), Math.hypot(dx, dz));
     if (distEnemy < 2.4) {
       bot.input.fire = 1;
       bot.input.mv = [1, 0, 0, 0];
@@ -302,38 +331,70 @@ function engage(room, bot, enemy, distEnemy) {
     return;
   }
 
-  // 人类：点射/连射 + 换弹 + 后退保持距离
-  if (now >= b.attackAt && w && w.canFire(now)) {
-    const isAuto = def?.auto || def?.melee;
-    if (isAuto && (now < b.burstUntil || Math.random() < 0.55)) {
+  // 切枪：优先主武器，主武器换弹/空仓时切手枪补火，换弹完成后切回
+  const primary = bot.weapons.get(2);
+  const pistol = bot.weapons.get(1);
+  let wantSlot = bot.activeSlot;
+  if (primary) {
+    const primReady = primary.state === 'ready' && primary.ammo > 0;
+    const pistolReady = pistol && pistol.state === 'ready' && pistol.ammo > 0;
+    if (wantSlot === 2 && !primReady && pistolReady) wantSlot = 1;
+    else if (wantSlot === 1 && primReady) wantSlot = 2;
+    else if (wantSlot === 1 && !pistolReady) wantSlot = 2;
+  } else if (pistol && wantSlot !== 1) {
+    wantSlot = 1;
+  }
+  if (wantSlot !== bot.activeSlot) bot.edge.sw = wantSlot;
+
+  // 瞄准：带缓慢刷新的持续误差（远距离误差更大），并平滑转向 → 准但不锁头
+  if (now >= b.aimRefreshAt) {
+    b.aimRefreshAt = now + 0.22 + Math.random() * 0.3;
+    const errScale = Math.min(0.12, 0.02 + distEnemy * 0.0016);
+    b.aimErrX = (Math.random() - 0.5) * errScale;
+    b.aimErrY = (Math.random() - 0.5) * errScale;
+  }
+  const dx = enemy.pos.x - bot.pos.x;
+  const dy = enemy.pos.y + 1.3 - (bot.pos.y + 1.55);
+  const dz = enemy.pos.z - bot.pos.z;
+  bot.yaw = angLerp(bot.yaw, Math.atan2(-dx, -dz) + b.aimErrX, 0.55);
+  bot.pitch = angLerp(bot.pitch, Math.atan2(dy, Math.hypot(dx, dz)) + b.aimErrY, 0.55);
+
+  const aw = bot.weapons.get(bot.activeSlot);
+  const adef = aw?.def;
+
+  // 主动换弹：弹匣过低且当前没在连发时换弹；空仓时立即换弹
+  if (aw && aw.ammo === 0) {
+    bot.input.r = 1;
+  } else if (aw && aw.state === 'ready' && aw.ammo <= (adef.magSize || 30) * 0.3 && now >= b.attackAt) {
+    bot.input.r = 1;
+    b.attackAt = now + 0.35;
+  }
+
+  // 开火：全自动按住连发（canFire 限速），半自动按射速点射（边沿触发）
+  if (now >= b.attackAt && aw && aw.canFire(now)) {
+    if (adef?.auto || adef?.melee) {
       bot.input.fire = 1;
-      if (Math.random() < 0.25) b.burstUntil = now + 0.5 + Math.random() * 0.4;
-      b.attackAt = now + 0.12;
+      b.attackAt = now + 0.06;
     } else {
-      // 半自动：单发点射，松开发射键后再扣下一发
-      bot.input.fire = isAuto ? 0 : 1;
-      b.attackAt = now + (isAuto ? 0.6 + Math.random() * 0.9 : Math.max(0.22, (60 / def.fireRate) * 1.15));
+      bot.input.fire = 1;
+      b.attackAt = now + Math.max(0.24, (60 / Math.max(1, adef.fireRate)) * 1.4 + 0.08);
     }
   }
-  if (w && w.ammo === 0 && now >= b.attackAt) {
-    bot.input.r = 1;
-  }
-  if (distEnemy > 12 && def?.id === 'warden') {
-    bot.edge.sw = 1;
-  }
-  // 走位
+
+  // 走位：保持中远距离施压 + 横向移动，太近后退
   if (now >= b.strafeAt) {
     b.strafeDir = Math.random() < 0.5 ? -1 : 1;
-    b.strafeAt = now + 0.4 + Math.random() * 0.7;
+    b.strafeAt = now + 0.35 + Math.random() * 0.6;
   }
-  bot.input.mv = [1, 0, 0, 0];
+  bot.input.mv = [0, 0, 0, 0];
+  if (distEnemy < 4) bot.input.mv[1] = 1;
+  else if (distEnemy > 8) bot.input.mv[0] = 1;
   bot.input.mv[b.strafeDir > 0 ? 3 : 2] = 1;
-  if (distEnemy < 5) bot.input.mv[1] = 1; // 后退
 }
 
 function moveToward(room, bot, target) {
   const dy = (target.y ?? 0) - bot.pos.y;
-  if (dy > 0.55 && Math.hypot(target.x - bot.pos.x, target.z - bot.pos.z) < 2.6) {
+  if (dy > 0.5 && Math.hypot(target.x - bot.pos.x, target.z - bot.pos.z) < 2.4 && dy < 2.2) {
     bot.input.j = 1;
   }
   const dx = target.x - bot.pos.x;
@@ -343,7 +404,6 @@ function moveToward(room, bot, target) {
   const fz = -Math.cos(bot.yaw);
   const forward = (dx / len) * fx + (dz / len) * fz;
   bot.input.mv = [forward > 0 ? 1 : 0, forward <= 0 ? 1 : 0, 0, 0];
-  if (Math.random() < 0.05) bot.input.j = 1;
   bot.yaw = Math.atan2(-dx, -dz);
 }
 
@@ -375,11 +435,17 @@ function handleObjective(room, bot) {
         input.mv = [0, 0, 0, 0];
       }
     }
-  } else if (!bot.isZombie && room.map.ammoBoxes) {
-    const w = bot.weapons.get(2);
+  } else if (!bot.isZombie) {
+    // 弹药不足 → 用弹药箱
+    const w = bot.weapons.get(2) || bot.weapons.get(bot.activeSlot);
     if (w && w.ammo < w.def.magSize * 0.4) {
       const box = room.ammoBoxes.find((b) => b.available && Math.hypot(b.pos.x - bot.pos.x, b.pos.z - bot.pos.z) < 2);
       if (box) input.u = 1;
+    }
+    // 血量过低 → 用回血箱
+    if (bot.hp < bot.maxHp * 0.6) {
+      const hb = room.healthBoxes.find((b) => b.available && Math.hypot(b.pos.x - bot.pos.x, b.pos.z - bot.pos.z) < 2);
+      if (hb) input.u = 1;
     }
   }
 }
