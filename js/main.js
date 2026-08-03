@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { Net } from './net.js';
+import { Host } from './host.js';
 import { Input } from './input.js';
 import { Renderer } from './renderer.js';
 import { buildMapMesh } from './maps.js';
@@ -87,6 +88,7 @@ const state = {
   zombieCatalog: [], // 生化模式选枪目录（含 Mod 主武器）
   zombieEquippedId: null,
   adsAmount: 0,       // 0=腰射，1=完全开镜（平滑过渡）
+  activeAds: null,    // 开镜参数（关镜回退期间保持，用于补出关镜动画）
   scopeCanvas: null,
 };
 
@@ -421,11 +423,12 @@ function backToMenu() {
   state.inGame = false;
   net.leave();
   $('room-code').textContent = '';
+  state.adsAmount = 0;
+  state.activeAds = null;
   if (state.scopeCanvas) {
     state.scopeCanvas.remove();
     state.scopeCanvas = null;
   }
-  state.adsAmount = 0;
   // 重置武器状态，避免跨房间残留（如生化买过的 AE-7 在拆弹局闪出）
   state.selfWeaponId = null;
   state.selfPrimaryId = null;
@@ -1014,15 +1017,15 @@ function updateSelf(dt, now) {
 // 返回 { x,y,z: 开镜时持枪位姿, fov: 开镜FOV, scope: 是否真镜片 }
 function adsParams(id) {
   const map = {
-    k9:           { x: 0.02, y: -0.10, z: -0.58, fov: 58, scope: false },
-    vx9:          { x: 0.02, y: -0.09, z: -0.56, fov: 54, scope: false },
-    arc17:        { x: 0.02, y: -0.10, z: -0.56, fov: 52, scope: false },
-    warden:       { x: 0.03, y: -0.08, z: -0.56, fov: 56, scope: false },
-    longshot:     { x: 0,    y: 0,     z: -0.5,  fov: 16, scope: true },
-    bruiser:      { x: 0.02, y: -0.09, z: -0.56, fov: 54, scope: false },
-    energy_rifle: { x: 0.02, y: -0.10, z: -0.56, fov: 52, scope: false },
-    cryo_gun:     { x: 0.02, y: -0.10, z: -0.56, fov: 54, scope: false },
-    railgun:      { x: 0,    y: 0,     z: -0.5,  fov: 22, scope: true },
+    k9:           { x: 0.03, y: -0.17, z: -0.58, fov: 58, scope: false },
+    vx9:          { x: 0.04, y: -0.16, z: -0.56, fov: 54, scope: false },
+    arc17:        { x: 0.03, y: -0.17, z: -0.56, fov: 52, scope: false },
+    warden:       { x: 0.04, y: -0.15, z: -0.56, fov: 56, scope: false },
+    longshot:     { x: 0.03, y: -0.16, z: -0.56, fov: 16, scope: true },
+    bruiser:      { x: 0.03, y: -0.16, z: -0.56, fov: 54, scope: false },
+    energy_rifle: { x: 0.03, y: -0.17, z: -0.56, fov: 52, scope: false },
+    cryo_gun:     { x: 0.03, y: -0.16, z: -0.56, fov: 54, scope: false },
+    railgun:      { x: 0.03, y: -0.16, z: -0.56, fov: 22, scope: true },
   };
   return map[id] || null;
 }
@@ -1121,13 +1124,18 @@ function updateCamera(dt, frame) {
   const s = state.self;
   cam.position.set(s.pos.x, s.pos.y + (s.crouch ? 1.05 : 1.62), s.pos.z);
   const ap = frame.ads && !s.isZombie && s.alive ? adsParams(state.selfWeaponId) : null;
-  // 平滑开镜：0（腰射）↔ 1（完全开镜）
+  // 开镜参数在关镜回退期间保留，确保枪模型/倍率/镜片都能平滑退回腰射（补出关镜动画）
+  if (ap) state.activeAds = ap;
+  const active = state.activeAds;
   const targetAds = ap ? 1 : 0;
-  state.adsAmount += (targetAds - state.adsAmount) * Math.min(1, dt * (ap && ap.scope ? 7 : 11));
-  if (Math.abs(state.adsAmount) < 0.002 && targetAds === 0) state.adsAmount = 0;
+  state.adsAmount += (targetAds - state.adsAmount) * Math.min(1, dt * (active && active.scope ? 7 : 11));
+  if (Math.abs(state.adsAmount) < 0.002 && targetAds === 0) {
+    state.adsAmount = 0;
+    state.activeAds = null;
+  }
   const t = state.adsAmount;
   // 倍率：从基础 FOV 平滑过渡到开镜 FOV
-  const targetFov = ap ? ap.fov : settings.fov;
+  const targetFov = active ? active.fov : settings.fov;
   cam.fov = lerp(settings.fov, targetFov, t);
   cam.updateProjectionMatrix();
   cam.rotation.order = 'YXZ';
@@ -1135,21 +1143,21 @@ function updateCamera(dt, frame) {
   cam.rotation.x = s.pitch;
 
   // 真镜片遮罩（狙击/磁轨）
-  const scoped = !!(ap && ap.scope && t > 0.35);
+  const scoped = !!(s.alive && active && active.scope && t > 0.35);
   updateScopeOverlay(scoped, (t - 0.35) / 0.65);
 
   if (state.viewmodel) {
     const vm = state.viewmodel;
     state.vmKick = Math.max(0, state.vmKick - dt * 5);
     state.vmSwing = Math.max(0, state.vmSwing - dt * 4);
-    // 开镜时持枪位姿（枪口/准星对齐屏幕中心），否则正常姿态
+    // 开镜时持枪位姿（准星对齐屏幕中心、枪身压低不挡视野），否则正常姿态
     const bob = moving() && s.grounded ? Math.sin(performance.now() * 0.009) : 0;
     const nX = 0.24 + Math.sin(performance.now() * 0.005) * 0.008 + bob * 0.004;
     const nY = -0.22 - state.vmKick * 0.04 - state.vmSwing * 0.08 + Math.abs(bob) * -0.008;
     const nZ = -0.5 + state.vmKick * 0.12 + state.vmSwing * 0.1;
-    const aX = ap ? ap.x : nX;
-    const aY = ap ? ap.y : nY;
-    const aZ = ap ? ap.z : nZ;
+    const aX = active ? active.x : nX;
+    const aY = active ? active.y : nY;
+    const aZ = active ? active.z : nZ;
     if (scoped) {
       vm.visible = false;
     } else {
@@ -1175,7 +1183,7 @@ function moving() {
 
 function updateCrosshair(dt, frame) {
   const s = state.self;
-  const ap = frame.ads && !s.isZombie && s.alive ? adsParams(state.selfWeaponId) : null;
+  const ap = frame.ads && !s.isZombie && s.alive ? adsParams(state.selfWeaponId) : state.activeAds;
   const el = document.getElementById('crosshair');
   const scoped = !!(ap && ap.scope && state.adsAmount > 0.35);
   el.style.display = scoped ? 'none' : '';
