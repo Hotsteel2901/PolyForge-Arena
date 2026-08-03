@@ -21,6 +21,7 @@ export class Input {
     this.scoreboard = false;
     this.chatOpen = false;
     this.locked = false;
+    this.skillQueued = false;
     this.sensitivity = 1;
     this.invertY = false;
     this.fov = 75;
@@ -87,6 +88,7 @@ export class Input {
       // 打开聊天由 HUD 处理
     }
     if (e.code === 'KeyR') this.reloadQueued = true;
+    if (e.code === 'KeyF') this.skillQueued = true; // 丧尸加速技能
     if (e.code === 'KeyE') this.useQueued = true;
     if (e.code === 'Space') this.jumpQueued = true;
     if (e.code.startsWith('Digit')) {
@@ -151,6 +153,7 @@ export class Input {
       sw: this.switchQueued >= 0 ? this.switchQueued : -1,
       swd: this.swdQueued || 0,
       u: (this.useHeld || this.useQueued || this.keys.has('KeyE')) ? 1 : 0,
+      skill: this.skillQueued ? 1 : 0,
     };
     return frame;
   }
@@ -162,5 +165,6 @@ export class Input {
     this.swdQueued = 0;
     this.useQueued = false;
     this.jumpQueued = false;
+    this.skillQueued = false;
   }
 }

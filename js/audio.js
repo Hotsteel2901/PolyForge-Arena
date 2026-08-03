@@ -123,6 +123,12 @@ export class Sfx {
     this.tone(105, 0.4, { type: 'sawtooth', gain: 0.08, sweepTo: 90, when: 0.05 });
   }
 
+  boost() {
+    // 丧尸加速：低频轰鸣上扫 + 呼啸
+    this.tone(55, 0.7, { type: 'sawtooth', gain: 0.16, sweepTo: 130 });
+    this.noise(0.7, { freq: 600, q: 1.1, gain: 0.26, sweepTo: 2600 });
+  }
+
   plant() {
     this.tone(660, 0.1, { type: 'square', gain: 0.12 });
     this.tone(880, 0.12, { type: 'square', gain: 0.12, when: 0.12 });

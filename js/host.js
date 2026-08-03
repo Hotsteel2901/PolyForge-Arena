@@ -178,6 +178,7 @@ export class Host {
     if (msg.swd) p.edge.swd = (p.edge.swd || 0) + (msg.swd > 0 ? 1 : -1);
     if (msg.r) p.edge.r = 1;
     if (msg.j) p.edge.j = 1;
+    if (msg.skill) p.edge.skill = 1;
     p.input = {
       mv,
       j: msg.j ? 1 : 0,

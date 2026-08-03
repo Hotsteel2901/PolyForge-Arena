@@ -1,6 +1,6 @@
 // 房间：固定步长模拟、模式编排、输入处理、武器/投掷物/快照/事件总线。
 
-import { TICK_RATE, TICK_MS, SNAPSHOT_INTERVAL_MS, TEAM, S2C, EVENT, PHYS, MODE, FINALE, HEALTH_BOX_HEAL } from '../shared/constants.js';
+import { TICK_RATE, TICK_MS, SNAPSHOT_INTERVAL_MS, TEAM, S2C, EVENT, PHYS, MODE, FINALE, HEALTH_BOX_HEAL, ZOMBIE_BOOST_SPEED, ZOMBIE_BOOST_DURATION, ZOMBIE_BOOST_COOLDOWN } from '../shared/constants.js';
 import { BUILTIN_WEAPONS, WeaponRuntime, shouldFire } from '../shared/weapons.js';
 import { PRICES, START_MONEY, MONEY_CAP, WIN_REWARD, LOSS_REWARD, PLANT_REWARD, DEFUSE_REWARD, costOf, ZOMBIE_START_MONEY, weaponPrice } from '../shared/economy.js';
 import { MAPS } from '../shared/maps/index.js';
@@ -454,6 +454,18 @@ export class Room {
     );
   }
 
+  // 生化模式丧尸加速技能（F 键）：20s 冷却，加速 3s
+  triggerZombieBoost(p) {
+    if (this.mode !== MODE.ZOMBIE || !p.isZombie || !p.alive) return false;
+    if (this.time < (p.skillReadyAt || 0)) return false; // 冷却中
+    p.speedOverride = ZOMBIE_BOOST_SPEED;
+    p.boostUntil = this.time + ZOMBIE_BOOST_DURATION;
+    p.skillReadyAt = this.time + ZOMBIE_BOOST_COOLDOWN;
+    this.sendTo(p.id, { type: 'zombie_boost', cooldown: ZOMBIE_BOOST_COOLDOWN });
+    this.broadcast({ type: 'zombie_boost_visual', id: p.id });
+    return true;
+  }
+
   // ---------- 主循环 ----------
   tick() {
     const dt = TICK_MS / 1000;
@@ -482,6 +494,11 @@ export class Room {
           respawnZombie(this, p);
         }
         continue;
+      }
+      // 丧尸加速技能到期：恢复基础速度
+      if (p.boostUntil && this.time >= p.boostUntil) {
+        p.boostUntil = 0;
+        p.speedOverride = undefined;
       }
       if (p.isBot) tickBot(this, p);
       if (p.isBot) p.inputAt = this.time;
@@ -595,6 +612,10 @@ export class Room {
     if (edge.r) {
       p.input.r = 1;
       edge.r = 0;
+    }
+    if (edge.skill) {
+      edge.skill = 0;
+      this.triggerZombieBoost(p);
     }
     // 切枪即时事件 + 序号：客户端据此忽略早于切枪的旧快照
     if (slotBefore !== p.activeSlot) {
@@ -966,6 +987,8 @@ export class Room {
         g: p.grenadeCount,
         mo: p.money,
         bi: p.boughtItems.map((r) => r.item),
+        sc: Math.max(0, Math.ceil((p.skillReadyAt || 0) - this.time)),
+        bo: p.boostUntil && this.time < p.boostUntil ? 1 : 0,
       });
     }
     const r = {

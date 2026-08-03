@@ -50,6 +50,7 @@ export class Hud {
       slots: $('slots'),
       hint: $('hint'),
       modsHud: $('mods-hud'),
+      skill: $('skill'),
     };
     const slotNames = ['刀', '手枪', '主武器', '雷'];
     this.slotEls = [];
@@ -132,6 +133,15 @@ export class Hud {
     this.r.deadMsg.classList.toggle('hidden', alive || (round && round.ph === 'buy'));
     this.setSlots(entry.w, entry.zb);
     this.updateObjective(round);
+    // 生化丧尸 F 加速技能指示
+    if (this.mode === 'zombie' && entry.zb) {
+      this.r.skill.classList.remove('hidden');
+      const cd = entry.sc ?? 0;
+      this.r.skill.textContent = cd > 0 ? `F 加速 · ${cd}s` : 'F 加速 · 就绪';
+      this.r.skill.classList.toggle('ready', cd === 0);
+    } else {
+      this.r.skill.classList.add('hidden');
+    }
   }
 
   setSlots(activeId, zombie) {

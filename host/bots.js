@@ -334,6 +334,10 @@ function engage(room, bot, enemy, distEnemy) {
   const def = w?.def;
 
   if (bot.isZombie) {
+    // 丧尸 Bot 追击时使用 F 加速技能（20s 冷却，4~18m 拉近距离用，随机错峰触发）
+    if (distEnemy > 4 && distEnemy < 18 && room.time >= (bot.skillReadyAt || 0) && Math.random() < 0.5) {
+      bot.edge.skill = 1;
+    }
     // 面向敌人直接追击
     const dx = enemy.pos.x - bot.pos.x;
     const dz = enemy.pos.z - bot.pos.z;

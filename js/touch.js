@@ -42,6 +42,7 @@ export function setupTouch(input, onLook, opts = {}) {
       <div class="zone touch-btn" id="shop-btn"><span class="btn-label">商店</span></div>
       <div class="zone touch-btn" id="score-btn"><span class="btn-label">计分</span></div>
       <div class="zone touch-btn" id="chat-btn"><span class="btn-label">聊天</span></div>
+      <div class="zone touch-btn" id="skill-btn"><span class="btn-label">技能</span></div>
     </div>
   `;
   document.getElementById('app').appendChild(ui);
@@ -61,6 +62,7 @@ export function setupTouch(input, onLook, opts = {}) {
   const shopBtn = $btn('shop-btn');
   const scoreBtn = $btn('score-btn');
   const chatBtn = $btn('chat-btn');
+  const skillBtn = $btn('skill-btn');
 
   let joyId = null;
   let joyOrigin = { x: 0, y: 0 };
@@ -170,6 +172,7 @@ export function setupTouch(input, onLook, opts = {}) {
   tap(shopBtn, () => { if (opts.onShop) opts.onShop(); }, 'shop');
   tap(scoreBtn, () => { input.scoreboard = !input.scoreboard; }, 'score');
   tap(chatBtn, () => { if (opts.onChat) opts.onChat(); }, 'chat');
+  tap(skillBtn, () => { input.skillQueued = true; }, 'skill');
 
   window.__touchDebug.ready = true;
   return ui;

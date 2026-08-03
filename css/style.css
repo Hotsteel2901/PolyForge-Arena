@@ -47,6 +47,8 @@ body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; col
 #armor-bar i { display: block; height: 100%; background: linear-gradient(90deg,#3f9fff,#9ecbff); transition: width .12s; }
 #hp-label, #armor-label { width: 34px; text-align: right; font-size: 13px; }
 #weapon-name { font-size: 14px; color: #d9ecdf; text-shadow: 0 1px 3px #000; }
+#skill { font-size: 13px; color: #ff9b8a; text-shadow: 0 1px 3px #000; }
+#skill.ready { color: #9fe6b6; }
 #bottom-right { position: absolute; right: 20px; bottom: 24px; text-align: right; }
 #ammo { font-size: 30px; font-weight: 800; text-shadow: 0 2px 6px #000; }
 #ammo-sep { color: #8fa99a; font-size: 20px; }
@@ -179,6 +181,7 @@ body {
 #score-btn { width: 56px; height: 56px; background: rgba(140,140,190,.5); right: 160px; bottom: 200px; }
 #chat-btn { width: 56px; height: 56px; background: rgba(90,180,150,.5); right: 226px; bottom: 200px; }
 #shop-btn { width: 56px; height: 56px; background: rgba(255,200,80,.55); right: 90px; bottom: 200px; }
+#skill-btn { width: 56px; height: 56px; background: rgba(190,110,255,.55); right: 0; bottom: 200px; }
 .touch-btn.pressed { transform: scale(0.9); filter: brightness(1.45); }
 /* 暂停时禁用触控层：让暂停面板/退出按钮可点击（look-zone 默认盖住整屏） */
 #touch-ui.touch-disabled .zone { pointer-events: none; }
