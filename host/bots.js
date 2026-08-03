@@ -351,11 +351,11 @@ function engage(room, bot, enemy, distEnemy) {
   const zombieMode = room.mode === 'zombie';
   if (now >= b.aimRefreshAt) {
     b.aimRefreshAt = now + 0.2 + Math.random() * 0.25;
-    // 误差为 [-errScale/2, errScale/2] 均匀分布，实际平均偏量约 errScale/4；
-    // 生化模式把 errScale 放大到接近拆弹的 3~4 倍，中远距离基本打不中。
+    // 误差为 [-errScale/2, errScale/2] 均匀分布，实际平均偏量约 errScale/4。
+    // 生化模式最不准（避免玩家被感染后瞬间被击穿）；拆弹也调低（不再激光），但比生化准一些。
     const errScale = zombieMode
       ? Math.min(0.32, 0.09 + distEnemy * 0.006)
-      : Math.min(0.12, 0.02 + distEnemy * 0.0016);
+      : Math.min(0.18, 0.045 + distEnemy * 0.0032);
     b.aimErrX = (Math.random() - 0.5) * errScale;
     b.aimErrY = (Math.random() - 0.5) * errScale;
   }
