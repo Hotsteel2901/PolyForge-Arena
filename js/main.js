@@ -256,6 +256,38 @@ async function connect() {
   }
 }
 
+// 离线模式：完全本地、与 VibeHub 联机完全平行。不 init VibeHub、不 join/announce 房间，
+// 只用 Host+Room 在本地跑一个只有 Bot 的房间，走与房主一致的本地回环协议（welcome 等照常）。
+// 因此正常玩家永远匹配不到它，离线房间之间也互不可见，退出即销毁、对主版零影响。
+async function connectOffline() {
+  const name = $('name-input').value.trim() || '战士';
+  const mode = $('mode-select').value;
+  const team = $('team-select').value;
+  $('menu').classList.add('hidden');
+  $('loading').classList.remove('hidden');
+  $('loading-text').textContent = '启动离线房间…';
+  try {
+    if (net.connected || net.host) net.leave(); // 清掉可能残留的联机状态
+    net.offline = true;
+    net.connected = false;
+    net.isHost = true;
+    net.peerId = 'offline-local';
+    net.hostPeerId = null;
+    net.room = null;
+    net.host = new Host(net);
+    // host.init 内部 start 本地 Room、加入玩家并本地回环 dispatch welcome → enterGame
+    await net.host.init({ name, mode, team });
+    net.connected = true;
+    window.__joinResult = { isHost: true, roomId: null, offline: true };
+  } catch (err) {
+    console.error('[offline] start failed', err);
+    net.leave();
+    $('loading').classList.add('hidden');
+    $('menu').classList.remove('hidden');
+    hud.toast('离线模式启动失败：' + (err?.message || '未知错误'));
+  }
+}
+
 function enterGame(welcome) {
   if (state.connected) return; // 重复 welcome（房主重发握手）时忽略
   state.connected = true;
@@ -447,8 +479,9 @@ function persistMatch(msg) {
       .then(() => refreshMyStats())
       .catch(() => {});
   }
-  // 房主：当局结果写 room.data（单局共享；vibe.global 仅作品创作者可写，房主无法维护全服排行）
-  if (net.isHost) {
+  // 房主：当局结果写 room.data（单局共享；vibe.global 仅作品创作者可写，房主无法维护全服排行）。
+  // 离线模式无 VibeHub room，跳过。
+  if (net.isHost && net.room) {
     net.room?.data?.set('last_match', {
       winner: msg.winner,
       mode: state.mode,
@@ -1509,6 +1542,11 @@ function boot() {
     sfx.resume();
     sfx.click();
     connect();
+  };
+  $('offline-btn').onclick = () => {
+    sfx.resume();
+    sfx.click();
+    connectOffline();
   };
   $('leave-room-btn').onclick = () => {
     sfx.click();
