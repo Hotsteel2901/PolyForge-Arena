@@ -134,9 +134,19 @@ export function tickBot(room, bot) {
   handleObjective(room, bot);
 }
 
+// 索敌：优先最近的敌对目标，但限制「同一实体最多同时被 3 个 bot 瞄准」，
+// 避免多个 bot 集火同一个目标把玩家瞬间打蒸发。
 function findEnemy(room, bot) {
+  const targetCount = new Map();
+  for (const p of room.players.values()) {
+    if (p === bot || !p.isBot) continue;
+    const t = p.botBrain && p.botBrain.target;
+    if (t && t.id) targetCount.set(t.id, (targetCount.get(t.id) || 0) + 1);
+  }
   let best = null;
   let bestD = Infinity;
+  let bestOver = null;
+  let bestOverD = Infinity;
   for (const p of room.players.values()) {
     if (p === bot || !p.alive) continue;
     const hostile = room.mode === 'zombie'
@@ -144,12 +154,19 @@ function findEnemy(room, bot) {
       : p.team !== bot.team;
     if (!hostile) continue;
     const d = distance(bot.pos, p.pos);
-    if (d < bestD) {
+    const count = targetCount.get(p.id) || 0;
+    if (count >= 3) {
+      // 已被 3 个 bot 瞄准的目标：仅作为兜底（没有空闲目标时才选它）
+      if (d < bestOverD) {
+        bestOverD = d;
+        bestOver = p;
+      }
+    } else if (d < bestD) {
       bestD = d;
       best = p;
     }
   }
-  return best;
+  return best || bestOver;
 }
 
 function hasLOS(room, from, to) {
@@ -352,17 +369,17 @@ function engage(room, bot, enemy, distEnemy) {
   if (now >= b.aimRefreshAt) {
     b.aimRefreshAt = now + 0.2 + Math.random() * 0.25;
     // 误差为 [-errScale/2, errScale/2] 均匀分布，实际平均偏量约 errScale/4。
-    // 生化模式最不准（避免玩家被感染后瞬间被击穿）；拆弹也调低（不再激光），但比生化准一些。
+    // 生化最不准；拆弹也明显降低，避免玩家被瞬间秒杀。
     const errScale = zombieMode
-      ? Math.min(0.32, 0.09 + distEnemy * 0.006)
-      : Math.min(0.18, 0.045 + distEnemy * 0.0032);
+      ? Math.min(0.5, 0.18 + distEnemy * 0.009)
+      : Math.min(0.34, 0.10 + distEnemy * 0.0055);
     b.aimErrX = (Math.random() - 0.5) * errScale;
     b.aimErrY = (Math.random() - 0.5) * errScale;
   }
   const dx = enemy.pos.x - bot.pos.x;
   const dy = enemy.pos.y + 1.3 - (bot.pos.y + 1.55);
   const dz = enemy.pos.z - bot.pos.z;
-  const converge = zombieMode ? 0.42 : 0.55;
+  const converge = zombieMode ? 0.42 : 0.5;
   bot.yaw = angLerp(bot.yaw, Math.atan2(-dx, -dz) + b.aimErrX, converge);
   bot.pitch = angLerp(bot.pitch, Math.atan2(dy, Math.hypot(dx, dz)) + b.aimErrY, converge);
 
