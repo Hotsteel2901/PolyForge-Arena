@@ -63,7 +63,7 @@ export function giveLoadout(p, mode, team) {
   p.weaponMoveMult = 1;
   p.grenadeCount = 0;
   if (p.isZombie) {
-    const claw = { ...BUILTIN_WEAPONS.fang, id: 'zclaw', name: '尸爪', range: 2.3, damage: 26, fireRate: 68, moveMult: 1 };
+    const claw = { ...BUILTIN_WEAPONS.fang, id: 'zclaw', name: '尸爪', range: 2.3, damage: 60, fireRate: 68, moveMult: 1 };
     p.weapons.set(0, new WeaponRuntime(claw));
     p.activeSlot = 0;
     return;
