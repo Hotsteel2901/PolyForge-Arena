@@ -346,10 +346,14 @@ function engage(room, bot, enemy, distEnemy) {
   }
   if (wantSlot !== bot.activeSlot) bot.edge.sw = wantSlot;
 
-  // 瞄准：带缓慢刷新的持续误差（远距离误差更大），并平滑转向 → 准但不锁头
+  // 瞄准：带缓慢刷新的持续误差（远距离误差更大），并平滑转向 → 准但不锁头。
+  // 生化模式 Bot 准度调低（避免玩家被感染后瞬间被 Bot 击穿），拆弹模式保持精准。
+  const zombieMode = room.mode === 'zombie';
   if (now >= b.aimRefreshAt) {
     b.aimRefreshAt = now + 0.22 + Math.random() * 0.3;
-    const errScale = Math.min(0.12, 0.02 + distEnemy * 0.0016);
+    const errScale = zombieMode
+      ? Math.min(0.18, 0.04 + distEnemy * 0.0028)
+      : Math.min(0.12, 0.02 + distEnemy * 0.0016);
     b.aimErrX = (Math.random() - 0.5) * errScale;
     b.aimErrY = (Math.random() - 0.5) * errScale;
   }
