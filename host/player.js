@@ -36,7 +36,7 @@ export function createPlayer(id, name, { isBot = false } = {}) {
     respawnAt: 0,
     lastHitAt: -99,
     input: { mv: [0, 0, 0, 0], j: 0, s: 0, c: 0, yaw: 0, pitch: 0, fire: 0, ads: 0, r: 0, sw: -1, swd: 0, u: 0 },
-    edge: { sw: -1, swd: 0, r: 0, j: 0, u: 0 },
+    edge: { sw: -1, swd: 0, r: 0, j: 0, u: 0, skill: 0 },
     switchSeq: 0,
     lastUseProgressAt: 0,
     useProgress: 0,
@@ -106,6 +106,9 @@ export function spawnPlayer(room, p, team, spawn, opts = {}) {
   p.respawnAt = 0;
   p.useProgress = 0;
   p.useTarget = null;
+  p.speedOverride = undefined;
+  p.boostUntil = 0;
+  p.skillReadyAt = 0;
   // 触发 mod 钩子（可能替换主武器，如 energy-rifle mod 默认替换），随后再应用玩家选枪的武器，
   // 保证生化模式买的枪在重生后不被 mod 覆盖
   room.emit('player_spawn', { player: p });

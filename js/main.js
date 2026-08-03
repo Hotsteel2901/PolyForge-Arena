@@ -17,7 +17,7 @@ import { setupTouch } from './touch.js';
 import { loadClientMods, dispatchMods } from './mods.js';
 import { CONFIG, resolveWork, VIBE_WORK_PLACEHOLDER } from './config.js';
 import { MAPS } from '../shared/maps/index.js';
-import { MODE_LABEL, PHYS } from '../shared/constants.js';
+import { MODE_LABEL, PHYS, ZOMBIE_BOOST_SPEED } from '../shared/constants.js';
 import { BUILTIN_WEAPONS, shouldFire } from '../shared/weapons.js';
 import { movePlayer } from '../shared/physics.js';
 import { rayAABB, directionFromAngles, distance, angLerp, lerp, clamp } from '../shared/math.js';
@@ -432,6 +432,8 @@ function backToMenu() {
   // 重置武器状态，避免跨房间残留（如生化买过的 AE-7 在拆弹局闪出）
   state.selfWeaponId = null;
   state.selfPrimaryId = null;
+  state.self.speedOverride = undefined;
+  state.self.skillCd = 0;
   state.zombieCatalog = [];
   state.zombieEquippedId = null;
   state.pendingLocal = null;
@@ -652,6 +654,15 @@ function wireEvents() {
     sfx.roundStart();
     dispatchMods(state.mods, 'finale_start', msg);
   });
+  net.on('zombie_boost', () => {
+    hud.toast('丧尸加速！F 技能冷却 20 秒');
+    sfx.boost();
+  });
+  net.on('zombie_boost_visual', (msg) => {
+    const rec = state.players.get(msg.id);
+    if (rec) effects.impact({ x: rec.next.x, y: rec.next.y + 1, z: rec.next.z }, 'spark');
+    sfx.boost();
+  });
   net.on('reloading', () => sfx.reload());
   net.on('use_progress', (msg) => {
     hud.showUseProgress(msg.action, msg.progress);
@@ -851,6 +862,8 @@ function applySelfState(e) {
   const s = state.self;
   s.alive = !!e.al;
   s.isZombie = !!e.zb;
+  s.skillCd = e.sc ?? 0;
+  s.speedOverride = e.bo ? ZOMBIE_BOOST_SPEED : undefined;
   s.team = e.t;
   s.money = e.mo ?? 0;
   s.boughtItems = e.bi || [];

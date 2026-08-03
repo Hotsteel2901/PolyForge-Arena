@@ -107,6 +107,11 @@ export const FINALE = Object.freeze({
   ZOMBIE_HP_MULT: 1.3, // 其余丧尸仅小幅提升血量
 });
 
+// 生化模式丧尸加速技能（F 键）
+export const ZOMBIE_BOOST_SPEED = 8.0;
+export const ZOMBIE_BOOST_DURATION = 3;
+export const ZOMBIE_BOOST_COOLDOWN = 20;
+
 // 回血箱每次回复量（人类在生化模式中使用）
 export const HEALTH_BOX_HEAL = 100;
 
