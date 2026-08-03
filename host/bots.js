@@ -347,12 +347,14 @@ function engage(room, bot, enemy, distEnemy) {
   if (wantSlot !== bot.activeSlot) bot.edge.sw = wantSlot;
 
   // 瞄准：带缓慢刷新的持续误差（远距离误差更大），并平滑转向 → 准但不锁头。
-  // 生化模式 Bot 准度调低（避免玩家被感染后瞬间被 Bot 击穿），拆弹模式保持精准。
+  // 生化模式 Bot 准度大幅调低（避免玩家被感染后瞬间被 Bot 击穿），拆弹模式保持精准。
   const zombieMode = room.mode === 'zombie';
   if (now >= b.aimRefreshAt) {
-    b.aimRefreshAt = now + 0.22 + Math.random() * 0.3;
+    b.aimRefreshAt = now + 0.2 + Math.random() * 0.25;
+    // 误差为 [-errScale/2, errScale/2] 均匀分布，实际平均偏量约 errScale/4；
+    // 生化模式把 errScale 放大到接近拆弹的 3~4 倍，中远距离基本打不中。
     const errScale = zombieMode
-      ? Math.min(0.18, 0.04 + distEnemy * 0.0028)
+      ? Math.min(0.32, 0.09 + distEnemy * 0.006)
       : Math.min(0.12, 0.02 + distEnemy * 0.0016);
     b.aimErrX = (Math.random() - 0.5) * errScale;
     b.aimErrY = (Math.random() - 0.5) * errScale;
@@ -360,8 +362,9 @@ function engage(room, bot, enemy, distEnemy) {
   const dx = enemy.pos.x - bot.pos.x;
   const dy = enemy.pos.y + 1.3 - (bot.pos.y + 1.55);
   const dz = enemy.pos.z - bot.pos.z;
-  bot.yaw = angLerp(bot.yaw, Math.atan2(-dx, -dz) + b.aimErrX, 0.55);
-  bot.pitch = angLerp(bot.pitch, Math.atan2(dy, Math.hypot(dx, dz)) + b.aimErrY, 0.55);
+  const converge = zombieMode ? 0.42 : 0.55;
+  bot.yaw = angLerp(bot.yaw, Math.atan2(-dx, -dz) + b.aimErrX, converge);
+  bot.pitch = angLerp(bot.pitch, Math.atan2(dy, Math.hypot(dx, dz)) + b.aimErrY, converge);
 
   const aw = bot.weapons.get(bot.activeSlot);
   const adef = aw?.def;
