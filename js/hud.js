@@ -262,8 +262,12 @@ export class Hud {
     span.className = 'name';
     span.textContent = system ? '系统' : name;
     div.append(span, document.createTextNode(`: ${text}`));
-    this.r.chatLog.appendChild(div);
-    while (this.r.chatLog.children.length > 40) this.r.chatLog.firstElementChild.remove();
+    const log = this.r.chatLog;
+    // 已在底部时才跟随新消息自动滚动；用户上翻查看历史时不打扰
+    const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    log.appendChild(div);
+    while (log.children.length > 40) log.firstElementChild.remove();
+    if (nearBottom) log.scrollTop = log.scrollHeight;
   }
 
   openChat(cb, onClose) {

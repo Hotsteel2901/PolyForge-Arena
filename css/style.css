@@ -62,7 +62,17 @@ body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; col
 #score-table .team-1 { color: #7fd0ff; } #score-table .team-2 { color: #ffab5e; }
 .sb-hint { margin-top: 18px; color: #7c9787; font-size: 12px; }
 #chat-wrap { position: absolute; left: 16px; bottom: 150px; width: 380px; max-width: 70vw; }
-#chat-log { display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow: hidden; }
+#chat-log {
+  display: flex; flex-direction: column; gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+  pointer-events: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+#chat-log::-webkit-scrollbar { width: 4px; }
+#chat-log::-webkit-scrollbar-thumb { background: rgba(255,255,255,.28); border-radius: 2px; }
+#chat-log::-webkit-scrollbar-track { background: transparent; }
 .chat-line { font-size: 13px; background: rgba(8,14,10,.55); padding: 2px 8px; border-radius: 4px; width: fit-content; max-width: 100%; }
 .chat-line .name { color: #8fd6ff; } .chat-line.system { color: #ffd35e; }
 #chat-input { pointer-events: auto; width: 100%; margin-top: 6px; background: rgba(8,14,10,.8); border: 1px solid rgba(255,255,255,.25); color: #fff; padding: 7px 10px; border-radius: 6px; font-size: 14px; outline: none; }
