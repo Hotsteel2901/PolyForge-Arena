@@ -107,7 +107,7 @@ export class Effects {
   }
 
   impact(pos, kind = 'spark') {
-    const color = kind === 'blood' ? 0xb41f1f : 0xffd27a;
+    const color = kind === 'blood' ? 0xb41f1f : kind === 'heal' ? 0x59e89a : 0xffd27a;
     const count = kind === 'blood' ? 10 : 8;
     for (let i = 0; i < count; i++) {
       const m = new THREE.Mesh(

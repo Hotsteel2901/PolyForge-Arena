@@ -36,6 +36,8 @@ export class Net {
     this.hostPeerId = null;
     this.host = null;
     this.roomId = null;
+    this._joinDiag = null;
+    window.__joinDiag = () => this._joinDiag;
   }
 
   on(type, fn) {
@@ -75,13 +77,42 @@ export class Net {
   async join({ name, mode, team, roomId, quick = true }) {
     if (!this.vibe) throw new Error('VibeHub 未初始化');
     const explicit = !!roomId;
-    let targetId = explicit ? String(roomId).trim() : '';
+    const originalCode = explicit ? String(roomId).trim().toUpperCase() : '';
+    let targetId = originalCode;
     let attempt = 0;
     let wantedHost = false; // 自建房间期望自己是房主（随机码撞上已存在房间时需换码）
-    const maxAttempts = explicit ? 1 : 2; // 显式房间码只试一次；自动建房最多重试一次
+    const maxAttempts = 2; // 显式房间码与自动建房都允许整体重试一次
+
+    // 加入诊断：失败后可在控制台 window.__joinDiag() 查看
+    this._joinDiag = { explicit, code: originalCode, precheck: null, attempt: 0 };
+
+    // 显式房间码：先确认房间真实存在且未关闭/未满，避免把拼错或失效的房间码
+    // 误当成“新房间”自建（这正是“房间码连不上、却开进一个空房间”的现象）。
+    if (explicit) {
+      let found = false;
+      let full = false;
+      let checkErr = false;
+      for (let i = 0; i < 4 && !found && !checkErr; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 600));
+        try {
+          const rooms = await this.vibe.rooms.list();
+          const meta = (rooms || []).find((r) => r.roomId === targetId);
+          if (meta && meta.open !== false) {
+            found = true;
+            full = !!meta.max && (meta.players ?? 0) >= meta.max;
+          }
+        } catch {
+          checkErr = true;
+        }
+      }
+      this._joinDiag.precheck = checkErr ? 'err' : found ? (full ? 'full' : 'found') : 'missing';
+      if (!found && !checkErr) throw new Error('房间码无效或房间不存在，请核对房间码后重试');
+      if (found && full) throw new Error('房间已满，请稍后再试或使用快速匹配');
+    }
 
     while (attempt < maxAttempts) {
       attempt += 1;
+      this._joinDiag.attempt = attempt;
       if (!targetId) {
         if (quick && attempt === 1) {
           try {
@@ -90,6 +121,17 @@ export class Net {
             });
           } catch (err) {
             console.warn('[net] quickJoin failed, will host a new room', err);
+          }
+          if (!targetId) {
+            // 房主刚建房的 announce 可能尚未生效：短暂等待后重试一次，避免误开新房间
+            try {
+              await new Promise((r) => setTimeout(r, 800));
+              targetId = await this.vibe.rooms.quickJoin({
+                filter: (r) => !!r.open && !!r.max && r.mode === mode && (r.players ?? 0) < r.max,
+              });
+            } catch (err) {
+              console.warn('[net] quickJoin retry failed', err);
+            }
           }
         }
         if (!targetId) {
@@ -102,7 +144,12 @@ export class Net {
       try {
         room = await withTimeout(this.vibe.room.join(targetId, { topology: 'host' }), 15000, '加入房间超时，请重试');
       } catch (err) {
-        if (explicit) throw err;
+        this._joinDiag.joinErr = (err && err.message) || '';
+        if (explicit) {
+          // 确认存在的房间加入失败：可能是连接建立慢，整体重试一次
+          if (attempt < maxAttempts) continue;
+          throw err;
+        }
         targetId = ''; // join 失败且非显式：换新房间重试
         continue;
       }
@@ -111,6 +158,8 @@ export class Net {
       this.peerId = room.peerId;
       this.isHost = !!room.isHost;
       this.hostPeerId = room.hostId;
+      this._joinDiag.isHost = this.isHost;
+      this._joinDiag.hostPeerId = this.hostPeerId;
 
       room.onMessage((msg, fromPeerId) => {
         if (!msg || typeof msg !== 'object') return;
@@ -139,18 +188,33 @@ export class Net {
       }
 
       // 非房主：先挂 welcome 监听（welcome 由 join 消息触发，必须提前注册），再发加入意图；
-      // 超时=房主离线/房间残留陈旧房主（房主刷新页面后的典型场景）
+      // 注意：vibe.room.join() 刚返回时 P2P/中继连接可能尚未建立，首条 join 会被丢弃，
+      // 导致房主收不到、welcome 永不返回。因此在等待 welcome 期间周期性重发（房主会忽略重复 join）。
       const welcomePromise = this.waitForWelcome(10000);
       const joinMsg = { type: 'join', name, mode, team };
-      if (this.hostPeerId) this.room.send(joinMsg, this.hostPeerId);
-      else this.room.send(joinMsg);
+      const sendJoin = () => {
+        if (this.hostPeerId) this.room.send(joinMsg, this.hostPeerId);
+        else this.room.send(joinMsg);
+      };
+      sendJoin();
+      const joinRetry = setInterval(sendJoin, 700);
+      welcomePromise.then(
+        () => clearInterval(joinRetry),
+        () => clearInterval(joinRetry)
+      );
       try {
         await welcomePromise;
+        this._joinDiag.welcome = 'ok';
       } catch (err) {
+        this._joinDiag.welcome = 'timeout';
         try { room.leave(); } catch { /* ignore */ }
         this.room = null;
         this.hostPeerId = null;
-        if (explicit) throw err;
+        if (explicit) {
+          // 已确认存在的房间仍握手失败：整个流程再试一次（可能是连接建立慢）
+          if (attempt < maxAttempts) continue;
+          throw err;
+        }
         targetId = ''; // 自动建房：换全新房间重试，避开残留的陈旧房主
         continue;
       }
@@ -179,6 +243,14 @@ export class Net {
     if (this.isHost) {
       this.host?.handlePeerEvent(ev);
       return;
+    }
+    if (this._joinDiag) {
+      (this._joinDiag.peers = this._joinDiag.peers || []).push({
+        type: ev.type,
+        id: (ev.id || '').slice(0, 8),
+        reason: ev.reason || '',
+      });
+      if (this._joinDiag.peers.length > 20) this._joinDiag.peers.shift();
     }
     if (ev.type === 'leave' && ev.id === this.hostPeerId) {
       this.dispatch({ type: 'net_close', reason: 'host_left' });

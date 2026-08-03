@@ -204,7 +204,7 @@ export class Hud {
       } else if (this.team === 2) {
         z.objective.textContent = '感染所有人类！';
       } else {
-        z.objective.textContent = '在时限内存活！弹药箱可补给（E）';
+        z.objective.textContent = '在时限内存活！弹药箱 / 回血箱可补给（E）';
       }
     }
   }

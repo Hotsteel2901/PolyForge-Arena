@@ -91,6 +91,13 @@ export default {
     { pos: { x: 0, y: 3.2, z: 20 }, respawn: 20 },
     { pos: { x: 0, y: 3.2, z: -20 }, respawn: 20 },
   ],
+  healthBoxes: [
+    { pos: { x: -14, y: 0, z: -14 }, respawn: 25 },
+    { pos: { x: -14, y: 0, z: 14 }, respawn: 25 },
+    { pos: { x: 14, y: 0, z: -14 }, respawn: 25 },
+    { pos: { x: 14, y: 0, z: 14 }, respawn: 25 },
+    { pos: { x: 0, y: 3.2, z: 20 }, respawn: 25 },
+  ],
   colliders: [
     // 边界
     W(-26, -26, 26, -25, 5),

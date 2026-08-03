@@ -1,7 +1,7 @@
 // 地图构建：由共享地图数据生成 Three.js 场景。
 
 import * as THREE from 'three';
-import { buildCrate, buildBarrel, buildPillar, buildSiteRing, buildAmmoBox, buildLightGlow } from './models.js';
+import { buildCrate, buildBarrel, buildPillar, buildSiteRing, buildAmmoBox, buildHealthBox, buildLightGlow } from './models.js';
 
 export function buildMapMesh(map) {
   const group = new THREE.Group();
@@ -107,6 +107,13 @@ export function buildMapMesh(map) {
   // 弹药箱
   for (const box of map.ammoBoxes || []) {
     const m = buildAmmoBox();
+    m.position.set(box.pos.x, box.pos.y ?? 0, box.pos.z);
+    group.add(m);
+  }
+
+  // 回血箱（生化模式）
+  for (const box of map.healthBoxes || []) {
+    const m = buildHealthBox();
     m.position.set(box.pos.x, box.pos.y ?? 0, box.pos.z);
     group.add(m);
   }
