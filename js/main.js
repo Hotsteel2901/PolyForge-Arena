@@ -86,6 +86,8 @@ const state = {
   pendingLocal: null,
   zombieCatalog: [], // 生化模式选枪目录（含 Mod 主武器）
   zombieEquippedId: null,
+  adsAmount: 0,       // 0=腰射，1=完全开镜（平滑过渡）
+  scopeCanvas: null,
 };
 
 // ---------------- 设置 ----------------
@@ -387,6 +389,11 @@ function backToMenu() {
   state.inGame = false;
   net.leave();
   $('room-code').textContent = '';
+  if (state.scopeCanvas) {
+    state.scopeCanvas.remove();
+    state.scopeCanvas = null;
+  }
+  state.adsAmount = 0;
   // 重置武器状态，避免跨房间残留（如生化买过的 AE-7 在拆弹局闪出）
   state.selfWeaponId = null;
   state.selfPrimaryId = null;
@@ -970,30 +977,157 @@ function updateSelf(dt, now) {
   return frame;
 }
 
+// ---------------- 开镜（ADS）：每把枪独立倍率与准星位姿 ----------------
+// 返回 { x,y,z: 开镜时持枪位姿, fov: 开镜FOV, scope: 是否真镜片 }
+function adsParams(id) {
+  const map = {
+    k9:           { x: 0.02, y: -0.10, z: -0.58, fov: 58, scope: false },
+    vx9:          { x: 0.02, y: -0.09, z: -0.56, fov: 54, scope: false },
+    arc17:        { x: 0.02, y: -0.10, z: -0.56, fov: 52, scope: false },
+    warden:       { x: 0.03, y: -0.08, z: -0.56, fov: 56, scope: false },
+    longshot:     { x: 0,    y: 0,     z: -0.5,  fov: 16, scope: true },
+    bruiser:      { x: 0.02, y: -0.09, z: -0.56, fov: 54, scope: false },
+    energy_rifle: { x: 0.02, y: -0.10, z: -0.56, fov: 52, scope: false },
+    cryo_gun:     { x: 0.02, y: -0.10, z: -0.56, fov: 54, scope: false },
+    railgun:      { x: 0,    y: 0,     z: -0.5,  fov: 22, scope: true },
+  };
+  return map[id] || null;
+}
+
+// 真镜片遮罩：全屏黑色 + 中心圆形镜片（透明让 3D 透出）+ 十字/密位
+function ensureScopeOverlay() {
+  if (state.scopeCanvas) return;
+  const c = document.createElement('canvas');
+  c.id = 'scope-canvas';
+  c.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;z-index:9;pointer-events:none;display:none;';
+  document.getElementById('app').appendChild(c);
+  state.scopeCanvas = c;
+}
+
+function drawScopeOverlay() {
+  const c = state.scopeCanvas;
+  if (!c) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = innerWidth;
+  const H = innerHeight;
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) {
+    c.width = Math.round(W * dpr);
+    c.height = Math.round(H * dpr);
+  }
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  const cx = W / 2;
+  const cy = H / 2;
+  const radius = Math.min(W, H) * 0.26;
+  // 圆形镜片：清空中心让 3D 透出
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+  // 镜片边缘
+  ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  // 十字线（密位）
+  ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(cx - radius * 0.94, cy);
+  ctx.lineTo(cx + radius * 0.94, cy);
+  ctx.moveTo(cx, cy - radius * 0.94);
+  ctx.lineTo(cx, cy + radius * 0.94);
+  ctx.stroke();
+  // 圆周密位刻度
+  ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+  ctx.lineWidth = 1.2;
+  for (let a = 0; a < 360; a += 45) {
+    const r1 = radius * 0.78;
+    const r2 = radius * 0.94;
+    const x1 = cx + Math.cos((a * Math.PI) / 180) * r1;
+    const y1 = cy + Math.sin((a * Math.PI) / 180) * r1;
+    const x2 = cx + Math.cos((a * Math.PI) / 180) * r2;
+    const y2 = cy + Math.sin((a * Math.PI) / 180) * r2;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+  // 中心点
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 2.2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function updateScopeOverlay(visible, opacity) {
+  if (!state.scopeCanvas) {
+    if (visible) ensureScopeOverlay();
+    else return;
+  }
+  const c = state.scopeCanvas;
+  c.style.display = visible ? '' : 'none';
+  if (!visible) return;
+  c.style.opacity = String(Math.max(0, Math.min(1, opacity)));
+  // 仅在视口尺寸变化时重绘（镜片画面本身是静态的）
+  if (c.dataset.w !== String(innerWidth) || c.dataset.h !== String(innerHeight)) {
+    c.dataset.w = String(innerWidth);
+    c.dataset.h = String(innerHeight);
+    drawScopeOverlay();
+  }
+}
+
 // ---------------- 视角与第一人称 ----------------
 function updateCamera(dt, frame) {
   const cam = renderer.camera;
   const s = state.self;
   cam.position.set(s.pos.x, s.pos.y + (s.crouch ? 1.05 : 1.62), s.pos.z);
-  const targetFov = frame.ads && !s.isZombie && state.selfWeaponId !== 'fang' && state.selfWeaponId !== 'zclaw' && state.selfWeaponId !== 'thunder' ? 50 : settings.fov;
-  cam.fov = lerp(cam.fov, targetFov, Math.min(1, dt * 12));
+  const ap = frame.ads && !s.isZombie && s.alive ? adsParams(state.selfWeaponId) : null;
+  // 平滑开镜：0（腰射）↔ 1（完全开镜）
+  const targetAds = ap ? 1 : 0;
+  state.adsAmount += (targetAds - state.adsAmount) * Math.min(1, dt * (ap && ap.scope ? 7 : 11));
+  if (Math.abs(state.adsAmount) < 0.002 && targetAds === 0) state.adsAmount = 0;
+  const t = state.adsAmount;
+  // 倍率：从基础 FOV 平滑过渡到开镜 FOV
+  const targetFov = ap ? ap.fov : settings.fov;
+  cam.fov = lerp(settings.fov, targetFov, t);
   cam.updateProjectionMatrix();
   cam.rotation.order = 'YXZ';
   cam.rotation.y = s.yaw;
   cam.rotation.x = s.pitch;
 
+  // 真镜片遮罩（狙击/磁轨）
+  const scoped = !!(ap && ap.scope && t > 0.35);
+  updateScopeOverlay(scoped, (t - 0.35) / 0.65);
+
   if (state.viewmodel) {
     const vm = state.viewmodel;
     state.vmKick = Math.max(0, state.vmKick - dt * 5);
     state.vmSwing = Math.max(0, state.vmSwing - dt * 4);
+    // 开镜时持枪位姿（枪口/准星对齐屏幕中心），否则正常姿态
     const bob = moving() && s.grounded ? Math.sin(performance.now() * 0.009) : 0;
-    vm.position.set(
-      0.24 + Math.sin(performance.now() * 0.005) * 0.008 + bob * 0.004,
-      -0.22 - state.vmKick * 0.04 - state.vmSwing * 0.08 + Math.abs(bob) * -0.008,
-      -0.5 + state.vmKick * 0.12 + state.vmSwing * 0.1
-    );
-    vm.rotation.x = state.vmKick * 0.1 + state.vmSwing * 0.7;
-    vm.visible = s.alive;
+    const nX = 0.24 + Math.sin(performance.now() * 0.005) * 0.008 + bob * 0.004;
+    const nY = -0.22 - state.vmKick * 0.04 - state.vmSwing * 0.08 + Math.abs(bob) * -0.008;
+    const nZ = -0.5 + state.vmKick * 0.12 + state.vmSwing * 0.1;
+    const aX = ap ? ap.x : nX;
+    const aY = ap ? ap.y : nY;
+    const aZ = ap ? ap.z : nZ;
+    if (scoped) {
+      vm.visible = false;
+    } else {
+      vm.visible = s.alive;
+      vm.position.set(
+        nX + (aX - nX) * t,
+        nY + (aY - nY) * t,
+        nZ + (aZ - nZ) * t
+      );
+      vm.rotation.x = (state.vmKick * 0.1 + state.vmSwing * 0.7) * (1 - t);
+    }
     const muzzle = vm.userData.muzzle;
     if (muzzle && frame.fire && s.alive && (state.selfWeaponId === 'zclaw' || state.selfWeaponId === 'fang')) {
       state.vmSwing = 1;
@@ -1008,13 +1142,18 @@ function moving() {
 
 function updateCrosshair(dt, frame) {
   const s = state.self;
+  const ap = frame.ads && !s.isZombie && s.alive ? adsParams(state.selfWeaponId) : null;
+  const el = document.getElementById('crosshair');
+  const scoped = !!(ap && ap.scope && state.adsAmount > 0.35);
+  el.style.display = scoped ? 'none' : '';
   let spread = 10;
   const def = weaponDef(state.selfWeaponId) || {};
-  if (frame.ads && !def.melee && !def.projectile && !s.isZombie) spread = 3;
+  // 开镜时准星收拢（瞄准状态，命中更准）
+  const adsT = state.adsAmount;
+  if (ap && !def.melee && !def.projectile && !s.isZombie) spread = lerp(10, 3, adsT);
   if (frame.fire) spread += def.recoil ? def.recoil * 900 : 8;
-  if (moving() && s.grounded) spread += 6;
-  if (!s.grounded) spread += 8;
-  const el = document.getElementById('crosshair');
+  if (moving() && s.grounded) spread += 6 * (1 - adsT);
+  if (!s.grounded) spread += 8 * (1 - adsT);
   const gap = Math.round(spread);
   const lines = el.querySelectorAll('.ch-line');
   if (lines.length === 4) {
@@ -1065,15 +1204,17 @@ function fireVisuals(frame) {
   state.lastShotAt = now;
   state.vmKick = 1;
   sfx.shot(def.sound || 'rifle');
-  if (state.viewmodel?.userData.muzzle) {
+  const scoped = !!(state.adsAmount > 0.35 && adsParams(state.selfWeaponId)?.scope);
+  if (state.viewmodel?.userData.muzzle && !scoped) {
     effects.muzzle(state.viewmodel.userData.muzzle);
   }
-  // 弹道（客户端视觉）
+  // 弹道（客户端视觉）：开镜用 adsSpread，与服务器命中分布一致 → 瞄哪打哪
   const dir = directionFromAngles(state.self.yaw, state.self.pitch);
   const from = { x: state.self.pos.x, y: state.self.pos.y + 1.62, z: state.self.pos.z };
+  const spread = frame.ads ? (def.adsSpread ?? def.spread ?? 0.01) : (def.spread ?? 0.02);
   const dir2 = directionFromAngles(
-    state.self.yaw + (Math.random() - 0.5) * (def.spread || 0.02) * 2,
-    state.self.pitch + (Math.random() - 0.5) * (def.spread || 0.02) * 2
+    state.self.yaw + (Math.random() - 0.5) * spread * 2,
+    state.self.pitch + (Math.random() - 0.5) * spread * 2
   );
   let maxT = 120;
   for (const box of state.map.colliders) {
@@ -1082,8 +1223,10 @@ function fireVisuals(frame) {
   }
   const to = { x: from.x + dir2.x * maxT, y: from.y + dir2.y * maxT, z: from.z + dir2.z * maxT };
   effects.tracer(from, to);
-  const muzzleWorld = state.viewmodel.userData.muzzle.getWorldPosition(new THREE.Vector3());
-  effects.shell({ x: muzzleWorld.x, y: muzzleWorld.y - 0.05, z: muzzleWorld.z }, { x: -dir.x, y: 0.5, z: -dir.z });
+  if (state.viewmodel?.userData.muzzle && !scoped) {
+    const muzzleWorld = state.viewmodel.userData.muzzle.getWorldPosition(new THREE.Vector3());
+    effects.shell({ x: muzzleWorld.x, y: muzzleWorld.y - 0.05, z: muzzleWorld.z }, { x: -dir.x, y: 0.5, z: -dir.z });
+  }
 }
 
 // ---------------- 主循环 ----------------
@@ -1097,6 +1240,19 @@ function loop(now) {
     return;
   }
   const frame = updateSelf(dt, now);
+  // 开镜灵敏度：按倍率缩放（放大越多越慢，便于精细瞄准）
+  if (!state.self.isZombie && state.self.alive) {
+    const ap = adsParams(state.selfWeaponId);
+    if (ap && state.adsAmount > 0.001) {
+      const zoom = settings.fov / ap.fov;
+      const scale = Math.max(0.12, 1 / (zoom * 0.85));
+      input.sensitivity = settings.sens * (scale + (1 - scale) * (1 - state.adsAmount));
+    } else {
+      input.sensitivity = settings.sens;
+    }
+  } else {
+    input.sensitivity = settings.sens;
+  }
   if (state.wasGrounded === false && state.self.grounded) sfx.land();
   state.wasGrounded = state.self.grounded;
   if (now - state.lastPingAt > 2000) {
