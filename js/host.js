@@ -21,7 +21,7 @@ export class Host {
   async init({ name, mode, team }) {
     const m = mode === 'zombie' ? 'zombie' : 'defusal';
     const room = new Room({
-      id: 'p2p',
+      id: this.net.offline ? 'offline' : 'p2p',
       mode: m,
       mapId: m === 'defusal' ? 'vertex' : 'containment',
       maxPlayers: CONFIG.maxPlayers,
@@ -32,23 +32,25 @@ export class Host {
     await room.start(); // 浏览器版 mods 加载 → 填 Bot → 开局/购买阶段 → 30Hz 主循环
     // 房主本人作为玩家加入（本地回环）
     this.handleJoin({ name, mode: m, team }, this.net.peerId);
-    // 上架房间供快速匹配（quickJoin 读取 open/max/mode 等元数据）。
-    // 首包可能因网络抖动失败：重试几次，确保房间尽快能被随机匹配搜到。
-    const announceMeta = {
-      open: true,
-      listed: true,
-      max: CONFIG.maxPlayers,
-      mode: m,
-      map: room.mapId,
-      modeLabel: MODE_LABEL[m],
-    };
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        await this.net.room.announce(announceMeta);
-        break;
-      } catch (err) {
-        if (attempt === 2) console.warn('[host] announce failed', err);
-        else await new Promise((r) => setTimeout(r, 700));
+    // 联机房主才上架房间供快速匹配（quickJoin 读取 open/max/mode 等元数据）。
+    // 离线模式没有 VibeHub room，跳过——不 announce、不进匹配池，对主版零影响。
+    if (this.net.room) {
+      const announceMeta = {
+        open: true,
+        listed: true,
+        max: CONFIG.maxPlayers,
+        mode: m,
+        map: room.mapId,
+        modeLabel: MODE_LABEL[m],
+      };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await this.net.room.announce(announceMeta);
+          break;
+        } catch (err) {
+          if (attempt === 2) console.warn('[host] announce failed', err);
+          else await new Promise((r) => setTimeout(r, 700));
+        }
       }
     }
     this.net.connected = true;

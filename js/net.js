@@ -36,6 +36,7 @@ export class Net {
     this.hostPeerId = null;
     this.host = null;
     this.roomId = null;
+    this.offline = false;
     this._joinDiag = null;
     window.__joinDiag = () => this._joinDiag;
   }
@@ -304,5 +305,6 @@ export class Net {
     this.isHost = false;
     this.host = null;
     this.hostPeerId = null;
+    this.offline = false;
   }
 }
