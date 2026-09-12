@@ -13,7 +13,6 @@ export class Input {
     this.swdQueued = 0;
     this.useQueued = false;
     this.useHeld = false;
-    this.swdQueued = 0;
     this.crouchHeld = false;
     this.onSwitch = null;
     this.onWheel = null;
@@ -23,11 +22,14 @@ export class Input {
     this.locked = false;
     this.skillQueued = false;
     this.sensitivity = 1;
+    this.effectiveSens = 1; // 当前有效灵敏度（已含 ADS 倍率），供触控视角复用
     this.invertY = false;
     this.fov = 75;
     this.mouseDX = 0;
     this.mouseDY = 0;
     this.mvTouch = null;
+    this.mvMag = 0;          // 触控摇杆推程（0..1），用于自动疾跑
+    this.sprintTouch = false; // 触控端疾跑（摇杆推满朝前触发）
     this.bound = {
       keydown: (e) => this.keydown(e),
       keyup: (e) => {
@@ -84,9 +86,7 @@ export class Input {
 
   keydown(e) {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-    if (e.code === 'Enter' && !this.chatOpen && document.getElementById('chat-input').classList.contains('hidden')) {
-      // 打开聊天由 HUD 处理
-    }
+    if (this.chatOpen) return; // 聊天中输入时不吃游戏按键
     if (e.code === 'KeyR') this.reloadQueued = true;
     if (e.code === 'KeyF') this.skillQueued = true; // 丧尸加速技能
     if (e.code === 'KeyE') this.useQueued = true;
@@ -143,7 +143,8 @@ export class Input {
     const frame = {
       mv,
       j: this.jumpQueued ? 1 : 0,
-      s: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 1 : 0,
+      // 疾跑：键盘 Shift，或触控摇杆推满朝前（见 js/touch.js setJoy）
+      s: (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.sprintTouch) ? 1 : 0,
       c: (this.keys.has('ControlLeft') || this.keys.has('KeyC') || this.crouchHeld) ? 1 : 0,
       yaw: this.yaw,
       pitch: this.pitch,

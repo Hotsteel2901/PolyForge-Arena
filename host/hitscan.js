@@ -108,14 +108,17 @@ export function performShot(room, shooter, def, opts = {}) {
       z: origin.z + dir.z * dist,
     } });
     // 穿透：能量步枪 / 磁轨步枪沿直线命中后续目标（仍被墙体阻挡）
+    // 伤害随穿透数量衰减，避免一枪串死整队
     if (def.pierce) {
       const skip = new Set([hit.player.id]);
+      const falloff = def.pierceFalloff ?? 0.7;
       for (let hop = 0; hop < 5; hop++) {
         const nextHit = raycastPlayers(room, shooter, origin, dir, tWorld, rewound, skip);
         if (!nextHit || nextHit.t >= tWorld - 0.01) break;
         skip.add(nextHit.player.id);
-        const d2 = computeShotDamage(def, { headshot: nextHit.headshot, dist: nextHit.t });
-        const r2 = damagePlayer(room, shooter, nextHit.player, d2, { weapon: def.id, headshot: nextHit.headshot, dist: nextHit.t });
+        const factor = Math.pow(falloff, hop + 1);
+        const d2 = computeShotDamage(def, { headshot: nextHit.headshot, dist: nextHit.t }) * factor;
+        const r2 = damagePlayer(room, shooter, nextHit.player, Math.max(1, Math.round(d2)), { weapon: def.id, headshot: nextHit.headshot, dist: nextHit.t });
         results.push({ ...r2, pos: {
           x: origin.x + dir.x * nextHit.t,
           y: origin.y + dir.y * nextHit.t,

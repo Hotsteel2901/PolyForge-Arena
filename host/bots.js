@@ -335,16 +335,26 @@ function engage(room, bot, enemy, distEnemy) {
 
   if (bot.isZombie) {
     // 丧尸 Bot 追击时使用 F 加速技能（20s 冷却，4~18m 拉近距离用，随机错峰触发）
-    if (distEnemy > 4 && distEnemy < 18 && room.time >= (bot.skillReadyAt || 0) && Math.random() < 0.5) {
+    if (distEnemy > 4 && distEnemy < 18 && room.time >= (bot.skillReadyAt || 0) && Math.random() < 0.35) {
       bot.edge.skill = 1;
     }
-    // 面向敌人直接追击
-    const dx = enemy.pos.x - bot.pos.x;
-    const dz = enemy.pos.z - bot.pos.z;
-    bot.yaw = Math.atan2(-dx, -dz);
-    bot.pitch = Math.atan2(enemy.pos.y + 1.2 - (bot.pos.y + 1.55), Math.hypot(dx, dz));
+    // 面向敌人追击，但带与人类 Bot 一致的瞄准误差：
+    // 旧的"零误差锁定"让丧尸贴脸后爪爪必中，人类毫无生还可能。
+    if (now >= b.aimRefreshAt) {
+      b.aimRefreshAt = now + 0.2 + Math.random() * 0.25;
+      const errScale = Math.min(0.42, 0.14 + distEnemy * 0.007);
+      b.aimErrX = (Math.random() - 0.5) * errScale;
+      b.aimErrY = (Math.random() - 0.5) * errScale * 0.5;
+    }
+    const zdx = enemy.pos.x - bot.pos.x;
+    const zdy = enemy.pos.y + 1.2 - (bot.pos.y + 1.55);
+    const zdz = enemy.pos.z - bot.pos.z;
+    bot.yaw = angLerp(bot.yaw, Math.atan2(-zdx, -zdz) + b.aimErrX, 0.46);
+    bot.pitch = angLerp(bot.pitch, Math.atan2(zdy, Math.hypot(zdx, zdz)) + b.aimErrY, 0.46);
     if (distEnemy < 2.4) {
-      bot.input.fire = 1;
+      // 挥爪有节奏：不再持续按住，给人类反击与拉开距离的窗口
+      bot.input.fire = now >= (b.attackAt || 0) ? 1 : 0;
+      b.attackAt = now + 0.26 + Math.random() * 0.24;
       bot.input.mv = [1, 0, 0, 0];
     } else {
       moveToward(room, bot, enemy.pos);
