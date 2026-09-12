@@ -38,7 +38,9 @@ input.attach();
 input.onSwitch = (slot) => applyLocalSwitch(slot);
 input.onWheel = (dir) => localCycleWeapon(dir);
 
-const defaultSettings = { sens: 1, fov: 75, vol: 0.8, music: true, shadow: true, quality: 'high' };
+// touchSens：触控视角专用倍率。与鼠标共用 sens 数值但量纲不同，
+// 默认 2.0 使 0.0022×1×2 ≈ 原有固定值 0.0045，升级后手感零回归。
+const defaultSettings = { sens: 1, touchSens: 2, fov: 75, vol: 0.8, music: true, shadow: true, quality: 'high' };
 const settings = loadSettings();
 
 const state = {
@@ -58,6 +60,9 @@ const state = {
     alive: false,
     isZombie: false,
     weaponMoveMult: 1,
+    correction: { x: 0, y: 0, z: 0 }, // 服务器位置校正量（增量消费，避免抖动）
+    reloadAnim: null,                 // 换弹动画状态
+    vmRecoil: 0,                      // 近战/开火的额外回弹
   },
   players: new Map(),
   grenadeMeshes: new Map(),
@@ -120,12 +125,17 @@ function applySettings() {
 
 function bindSettingsUI() {
   $('set-sens').value = settings.sens;
+  $('set-touch-sens').value = settings.touchSens ?? 2;
   $('set-fov').value = settings.fov;
   $('set-vol').value = Math.round(settings.vol * 100);
   $('set-music').value = settings.music ? '1' : '0';
   $('set-shadow').value = settings.shadow ? '1' : '0';
   $('set-quality').value = settings.quality;
+  // 触控灵敏度只对触屏设备有意义，非触屏隐藏该行，避免设置面板出现无效项
+  const touchRow = $('set-touch-sens')?.closest('label');
+  if (touchRow && !input.isTouchPrimary()) touchRow.classList.add('hidden');
   $('set-sens').oninput = (e) => { settings.sens = +e.target.value; saveSettings(); applySettings(); };
+  $('set-touch-sens').oninput = (e) => { settings.touchSens = +e.target.value; saveSettings(); applySettings(); };
   $('set-fov').oninput = (e) => { settings.fov = +e.target.value; saveSettings(); applySettings(); };
   $('set-vol').oninput = (e) => { settings.vol = +e.target.value / 100; saveSettings(); applySettings(); };
   $('set-music').onchange = (e) => {
@@ -326,8 +336,12 @@ function enterGame(welcome) {
   sfx.roundStart();
 
   state.touchUI = setupTouch(input, (dx, dy) => {
-    input.yaw -= dx * 0.0045;
-    input.pitch = clamp(input.pitch - dy * 0.0045, -1.55, 1.55);
+    // 触控视角：0.0022 与鼠标同一量纲，× touchSens 补偿触屏与鼠标的手感差异。
+    // 读 effectiveSens（= settings.sens × ADS 倍率）而非写死常数，
+    // 这样设置里的灵敏度对触屏生效，开镜后也会按倍率降速。
+    const s = 0.0022 * (input.effectiveSens || 1) * (settings.touchSens ?? 2);
+    input.yaw -= dx * s;
+    input.pitch = clamp(input.pitch - dy * s, -1.55, 1.55);
   }, {
     onShop: () => {
       toggleBuy(); // 拆弹=购买菜单，生化=选枪界面
@@ -345,6 +359,21 @@ function enterGame(welcome) {
       const shopBtn = document.getElementById('shop-btn');
       const label = shopBtn?.querySelector('.btn-label');
       if (label) label.textContent = '选枪';
+    }
+    // 触屏进入对局时尝试全屏：移动浏览器地址栏会持续占位，
+    // 横屏下尤其压缩可视区。iOS 需用户手势，失败静默（顶部操作条另有全屏按钮兜底）。
+    try {
+      const el = document.documentElement;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req && !document.fullscreenElement) {
+        const p = req.call(el);
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      }
+      if (screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock('landscape').catch(() => {});
+      }
+    } catch {
+      // 不支持全屏/方向锁的环境：忽略，不影响游玩
     }
   }
 
@@ -663,7 +692,13 @@ function wireEvents() {
     if (rec) effects.impact({ x: rec.next.x, y: rec.next.y + 1, z: rec.next.z }, 'spark');
     sfx.boost();
   });
-  net.on('reloading', () => sfx.reload());
+  net.on('reloading', (msg) => {
+    sfx.reload();
+    // 触发换弹动画：时长取该武器实际 reloadTime，保证动画与服务器逻辑同步收尾
+    const def = weaponDef(msg?.weapon || state.selfWeaponId) || {};
+    const dur = def.reloadTime || 1.8;
+    state.self.reloadAnim = { t: 0, dur: Math.max(0.4, dur) };
+  });
   net.on('use_progress', (msg) => {
     hud.showUseProgress(msg.action, msg.progress);
     const step = Math.floor(msg.progress * 10);
@@ -862,7 +897,7 @@ function applySelfState(e) {
   const s = state.self;
   s.alive = !!e.al;
   s.isZombie = !!e.zb;
-  s.skillCd = e.sc ?? 0;
+  s.skillCd = e.sk ?? 0;
   s.speedOverride = e.bo ? ZOMBIE_BOOST_SPEED : undefined;
   s.team = e.t;
   s.money = e.mo ?? 0;
@@ -872,15 +907,24 @@ function applySelfState(e) {
   // 诊断：出生后是否掉出地图
   window.__self = { y: e.y, alive: !!e.al };
   window.__minSelfY = Math.min(window.__minSelfY ?? Infinity, e.y);
-  const d = distance(s.pos, { x: e.x, y: e.y, z: e.z });
+  // 服务器校正：本地已做预测 + 碰撞求解，这里只做"误差回拉"，不再逐帧 lerp。
+  // 旧实现每帧 lerp 0.18，等于让 30Hz 的房主快照与本地每帧预测互相拉扯，
+  // 会造成行走时周期性抖动（快照把位置拽回服务器估算值 → 下一帧又预测出去）。
+  // 现改为：小误差写入一个平滑修正量由渲染层按帧衰减消费；大误差才硬同步。
+  const dx = e.x - s.pos.x;
+  const dy = e.y - s.pos.y;
+  const dz = e.z - s.pos.z;
+  const d = Math.hypot(dx, dy, dz);
   if (d > 2.8) {
+    // 严重偏差（出生、传送、被撞飞）：立即对齐
     s.pos = { x: e.x, y: e.y, z: e.z };
     s.vel = { x: 0, y: 0, z: 0 };
-  } else {
-    s.pos.x = lerp(s.pos.x, e.x, 0.18);
-    s.pos.y = lerp(s.pos.y, e.y, 0.18);
-    s.pos.z = lerp(s.pos.z, e.z, 0.18);
+    s.correction = { x: 0, y: 0, z: 0 };
+  } else if (d > 0.001) {
+    // 平滑校正量：随快照更新，由 updateSelf 按帧率无关的方式逐步清零
+    s.correction = { x: dx, y: dy, z: dz };
   }
+  window.__posErr = +d.toFixed(3);
   s.ammo = e.am ?? 0;
   window.__snapW = e.w;
   window.__snapWs = e.ws ?? -1;
@@ -903,12 +947,11 @@ function applySelfState(e) {
     state.selfWeaponId = e.w;
     rebuildViewmodel(e.w);
     window.__viewmodelWeapon = e.w;
+    recordPrimary(e.w);
     if (!first && performance.now() - (state.localSwitchAt || 0) > 400) sfx.switchWeapon();
   } else if (!state.selfWeaponId) {
     state.selfWeaponId = e.w;
-  const ewDef = weaponDef(e.w);
-  if (e.w && ewDef && ewDef.slot === 2) state.selfPrimaryId = e.w;
-  else if (e.w && !['fang', 'k9', 'thunder', 'zclaw'].includes(e.w)) state.selfPrimaryId = e.w; // Mod 武器视为主武器
+    recordPrimary(e.w);
   } else if (staleWeapon && !!e.zb !== state.self.isZombie) {
     // 僵尸形态变化强制跟随（切枪序号不覆盖变身）
     state.selfWeaponId = e.w;
@@ -916,6 +959,19 @@ function applySelfState(e) {
     window.__viewmodelWeapon = e.w;
   }
   hud.setSelf(e, state.round, s.alive);
+  // 技能按钮（丧尸加速）只在生化模式且自身为丧尸时出现，
+  // 判定标准与 hud.setSelf 里的 F 加速指示一致，避免拆弹模式挂着无效按钮。
+  state.touchUI?.setSkillVisible?.(state.mode === 'zombie' && !!e.zb);
+}
+
+// 记住主武器（用于复活/切枪后保持上一把枪）：
+// 显式 slot===2 优先；未注册的 id（Mod 武器）也视为主武器
+function recordPrimary(id) {
+  if (!id) return;
+  const def = weaponDef(id);
+  if (def ? def.slot === 2 : !['fang', 'k9', 'thunder', 'zclaw'].includes(id)) {
+    state.selfPrimaryId = id;
+  }
 }
 
 // 切换武器：预构建缓存 + 显隐切换，避免每帧同步建模造成卡顿
@@ -932,6 +988,7 @@ function rebuildViewmodel(id) {
   state.viewmodel = vm;
   state.vmKick = 0;
   state.vmSwing = 0;
+  state.self.reloadAnim = null; // 换枪打断换弹动画，避免新武器继承换弹姿态
 }
 
 // 槽位 → 武器 id（本地乐观切枪用；主武器保留当前快照里的 id，兼容 Mod 替换）
@@ -1000,6 +1057,25 @@ function updateSelf(dt, now) {
   if (frame.ads && !s.isZombie && !def.melee && !def.projectile) s.weaponMoveMult *= 0.78;
   if (s.alive && state.map) {
     movePlayer(s, frame, Math.min(dt, 0.05), state.map.colliders);
+  }
+  // 服务器校正量按帧衰减消费：帧率无关（指数衰减），视觉上是一次柔和回拉而非跳变。
+  // k=8 为实测最优：把行走时的速度突变从 7.15 m/s 压到 2.15 m/s（降幅约 70%），
+  // 同时约 0.4s 内收敛完毕，不会留下可感知的漂移。
+  const corr = s.correction;
+  if (corr && (corr.x || corr.y || corr.z)) {
+    const k = 1 - Math.exp(-Math.min(dt, 0.05) * 8);
+    const cx = corr.x * k;
+    const cy = corr.y * k;
+    const cz = corr.z * k;
+    s.pos.x += cx;
+    s.pos.y += cy;
+    s.pos.z += cz;
+    corr.x -= cx;
+    corr.y -= cy;
+    corr.z -= cz;
+    if (Math.abs(corr.x) < 0.0005) corr.x = 0;
+    if (Math.abs(corr.y) < 0.0005) corr.y = 0;
+    if (Math.abs(corr.z) < 0.0005) corr.z = 0;
   }
   if (now - state.lastInputAt >= 33) {
     const sendFrame = { ...frame, seq: Math.floor(now) };
@@ -1162,31 +1238,144 @@ function updateCamera(dt, frame) {
   if (state.viewmodel) {
     const vm = state.viewmodel;
     state.vmKick = Math.max(0, state.vmKick - dt * 5);
-    state.vmSwing = Math.max(0, state.vmSwing - dt * 4);
-    // 开镜时持枪位姿（准星对齐屏幕中心、枪身压低不挡视野），否则正常姿态
-    const bob = moving() && s.grounded ? Math.sin(performance.now() * 0.009) : 0;
-    const nX = 0.24 + Math.sin(performance.now() * 0.005) * 0.008 + bob * 0.004;
-    const nY = -0.22 - state.vmKick * 0.04 - state.vmSwing * 0.08 + Math.abs(bob) * -0.008;
-    const nZ = -0.5 + state.vmKick * 0.12 + state.vmSwing * 0.1;
-    const aX = active ? active.x : nX;
-    const aY = active ? active.y : nY;
-    const aZ = active ? active.z : nZ;
-    if (scoped) {
-      vm.visible = false;
+    // 挥砍动画时长与武器射速对齐（匕首 170RPM≈0.35s，尸爪 72RPM≈0.83s），
+    // 这样"挥完即到下一次可攻击"，动作与手感一致而不是各有各的节奏。
+    const swingDef = weaponDef(state.selfWeaponId) || {};
+    const swingDur = swingDef.melee ? Math.max(0.18, 60 / Math.max(1, swingDef.fireRate)) : 0.25;
+    state.vmSwing = Math.max(0, state.vmSwing - dt / swingDur);
+    updateViewmodelAnim(s, vm, dt, t, active, scoped, frame);
+  }
+}
+
+// ---------------- 第一人称武器动画 ----------------
+// 移动摆动相位由实际水平位移驱动（而非 wall-clock），这样"走着抖"在停下来时
+// 会自然归零，也不会因为帧率/时间漂移产生跳变。
+function updateViewmodelAnim(s, vm, dt, adsT, active, scoped, frame) {
+  const id = state.selfWeaponId;
+  const def = weaponDef(id) || {};
+  const isMelee = !!def.melee;
+  const movingNow = moving();
+
+  // ---- 移动摆动（bob）：按位移累积相位 ----
+  const speed = Math.hypot(s.vel.x, s.vel.z);
+  if (movingNow && speed > 0.25) {
+    state.bobPhase = (state.bobPhase || 0) + dt * (6.2 + speed * 1.15);
+  } else {
+    // 停步时相位平滑收敛到最近的正中，避免摆动突然定在极限位置
+    const target = Math.round((state.bobPhase || 0) / Math.PI) * Math.PI;
+    state.bobPhase = (state.bobPhase || 0) + (target - (state.bobPhase || 0)) * Math.min(1, dt * 9);
+  }
+  const ph = state.bobPhase || 0;
+  const amp = movingNow ? Math.min(1, speed / 5.5) * (1 - adsT * 0.72) : 0;
+  const bobX = Math.sin(ph) * 0.011 * amp;
+  const bobY = -Math.abs(Math.cos(ph)) * 0.013 * amp;
+  const bobRoll = Math.sin(ph) * 0.028 * amp;
+
+  // ---- 近战挥砍：以 0..1 的挥砍进度驱动多段曲线 ----
+  // 前 30% 抬手蓄力，随后快速下劈，尾部回位。匕首与尸爪节奏不同。
+  let swingPose = null;
+  if (state.vmSwing > 0 && isMelee) {
+    const isClaw = id === 'zclaw';
+    // vmSwing 从 1 线性衰减到 0；映射为 0(起手)→1(收招)
+    const p = 1 - state.vmSwing;
+    const windup = isClaw ? 0.34 : 0.28;   // 蓄力占比
+    const clawArc = isClaw ? 1.15 : 0.85;  // 挥砍幅度：尸爪更狠
+    if (p < windup) {
+      // 蓄力：向后上方抬起
+      const k = easeOutCubic(p / windup);
+      swingPose = {
+        px: k * (isClaw ? 0.10 : 0.07),
+        py: k * (isClaw ? 0.16 : 0.12),
+        pz: k * 0.11,
+        rx: -k * (isClaw ? 0.55 : 0.42),
+        ry: k * (isClaw ? 0.22 : 0.16),
+        rz: 0,
+      };
     } else {
-      vm.visible = s.alive;
-      vm.position.set(
-        nX + (aX - nX) * t,
-        nY + (aY - nY) * t,
-        nZ + (aZ - nZ) * t
-      );
-      vm.rotation.x = (state.vmKick * 0.1 + state.vmSwing * 0.7) * (1 - t);
-    }
-    const muzzle = vm.userData.muzzle;
-    if (muzzle && frame.fire && s.alive && (state.selfWeaponId === 'zclaw' || state.selfWeaponId === 'fang')) {
-      state.vmSwing = 1;
+      // 下劈再回位
+      const k = (p - windup) / (1 - windup);
+      const strike = Math.sin(Math.min(1, k * 1.9) * Math.PI);
+      const settle = easeOutCubic(Math.max(0, k - 0.5) * 2);
+      const w = 1 - settle;
+      swingPose = {
+        px: (isClaw ? 0.10 : 0.07) * w - strike * (isClaw ? 0.20 : 0.15),
+        py: (isClaw ? 0.16 : 0.12) * w - strike * (isClaw ? 0.26 : 0.19),
+        pz: 0.11 * w - strike * (isClaw ? 0.30 : 0.24),
+        rx: -(isClaw ? 0.55 : 0.42) * w + strike * clawArc,
+        ry: (isClaw ? 0.22 : 0.16) * w - strike * (isClaw ? 0.36 : 0.26),
+        rz: strike * (isClaw ? -0.22 : -0.15),
+      };
     }
   }
+
+  // ---- 换弹动画 ----
+  let reloadPose = null;
+  const rl = s.reloadAnim;
+  if (rl && rl.t < rl.dur) {
+    rl.t += dt;
+    const p = Math.min(1, rl.t / rl.dur);
+    // 三段：前 35% 落枪/压下，35%~70% 换弹（下沉旋转），70%~100% 复位上抬
+    const down = p < 0.35 ? easeOutCubic(p / 0.35)
+      : p < 0.7 ? 1
+      : 1 - easeOutCubic((p - 0.7) / 0.3);
+    const shake = p > 0.3 && p < 0.78 ? Math.sin(p * 46) * (1 - Math.abs(p - 0.54) / 0.24) : 0;
+    reloadPose = {
+      px: -0.06 * down,
+      py: -0.20 * down + shake * 0.012,
+      pz: 0.10 * down,
+      rx: 0.62 * down,
+      ry: -0.30 * down,
+      rz: 0.26 * down + shake * 0.05,
+    };
+    if (rl.t >= rl.dur) s.reloadAnim = null;
+  }
+
+  // ---- 合成位姿：基础 + 开镜插值 ----
+  const baseX = 0.24 + Math.sin(ph * 0.5) * 0.006;
+  const baseY = -0.22;
+  const baseZ = -0.5;
+  let nX = baseX + bobX + state.vmKick * 0.006;
+  let nY = baseY + bobY - state.vmKick * 0.04;
+  let nZ = baseZ + state.vmKick * 0.12;
+  let rotX = state.vmKick * 0.1;
+  let rotY = 0;
+  let rotZ = bobRoll;
+
+  if (swingPose) {
+    // 近战挥砍幅度不受开镜插值影响（近战不参与开镜）
+    nX += swingPose.px;
+    nY += swingPose.py;
+    nZ += swingPose.pz;
+    rotX += swingPose.rx;
+    rotY += swingPose.ry;
+    rotZ += swingPose.rz;
+  }
+  if (reloadPose) {
+    nX += reloadPose.px;
+    nY += reloadPose.py;
+    nZ += reloadPose.pz;
+    rotX += reloadPose.rx;
+    rotY += reloadPose.ry;
+    rotZ += reloadPose.rz;
+  }
+
+  const aX = active ? active.x : nX;
+  const aY = active ? active.y : nY;
+  const aZ = active ? active.z : nZ;
+  if (scoped) {
+    vm.visible = false;
+  } else {
+    vm.visible = s.alive;
+    vm.position.set(nX + (aX - nX) * adsT, nY + (aY - nY) * adsT, nZ + (aZ - nZ) * adsT);
+    vm.rotation.x = rotX * (1 - adsT);
+    vm.rotation.y = rotY * (1 - adsT);
+    vm.rotation.z = rotZ * (1 - adsT);
+  }
+}
+
+function easeOutCubic(x) {
+  const t = Math.max(0, Math.min(1, x));
+  return 1 - Math.pow(1 - t, 3);
 }
 
 function moving() {
@@ -1235,7 +1424,9 @@ function fireVisuals(frame) {
   if (def.projectile === 'grenade') {
     if (performance.now() - (state.lastThrowAt || 0) > 300) {
       state.lastThrowAt = performance.now();
+      // 投掷：抬手投出的动画 + 投掷音效（手雷不产生枪口焰）
       state.vmSwing = 1;
+      state.throwAnimAt = performance.now();
       sfx.throw();
     }
     return;
@@ -1243,12 +1434,14 @@ function fireVisuals(frame) {
   if (def.melee) {
     if (performance.now() - (state.lastMeleeAt || 0) > 240) {
       state.lastMeleeAt = performance.now();
+      // 近战挥砍：只触发挥砍动画与挥砍音效，不产生枪口焰（近战没有枪口）
       state.vmSwing = 1;
       sfx.shot('melee');
       const dir = directionFromAngles(state.self.yaw, state.self.pitch);
       const from = { x: state.self.pos.x, y: state.self.pos.y + 1.6, z: state.self.pos.z };
       const to = { x: from.x + dir.x * 2.2, y: from.y + dir.y * 2.2, z: from.z + dir.z * 2.2 };
-      effects.tracer(from, to, 0xd8ffd8);
+      // 挥砍轨迹：用短促的弧形划痕代替直线弹道，更贴合刀具
+      effects.slash(from, to, state.selfWeaponId === 'zclaw');
     }
     return;
   }
@@ -1307,6 +1500,8 @@ function loop(now) {
   } else {
     input.sensitivity = settings.sens;
   }
+  // 触控视角复用同一结果（见 setupTouch 回调），确保开镜降速对触屏同样生效
+  input.effectiveSens = input.sensitivity;
   if (state.wasGrounded === false && state.self.grounded) sfx.land();
   state.wasGrounded = state.self.grounded;
   if (now - state.lastPingAt > 2000) {

@@ -164,10 +164,21 @@ export function buildViewmodel(id) {
       break;
     }
     case 'fang': {
-      add(g, new THREE.CylinderGeometry(0.018, 0.03, 0.26, 8), metal, 0, 0.03, -0.18, Math.PI / 2, 0, 0);
-      add(g, new THREE.ConeGeometry(0.018, 0.1, 8), metal, 0, 0.03, -0.34, Math.PI / 2, 0, 0);
-      add(g, B(0.05, 0.03, 0.09), metal, 0, 0.03, -0.02);
-      add(g, B(0.04, 0.11, 0.11), grip, 0, -0.06, 0.05, 0.12);
+      // Fang 匕首：握柄 → 护手 → 渐宽刀身 → 尖锋。刀身略向上倾，符合持握姿态。
+      const blade = mat(0xb9c4cc, { metalness: 0.9, roughness: 0.22 });
+      const edge = mat(0xe8f2f8, { metalness: 0.95, roughness: 0.12 });
+      // 握柄
+      add(g, B(0.042, 0.05, 0.13), grip, 0, 0.02, 0.07);
+      // 护手
+      add(g, B(0.10, 0.022, 0.025), dark, 0, 0.025, -0.005);
+      // 刀身主体（扁平、略上翘）
+      add(g, B(0.032, 0.052, 0.24), blade, 0, 0.042, -0.14, -0.06);
+      // 刀锋亮边
+      add(g, B(0.008, 0.056, 0.24), edge, 0.017, 0.042, -0.14, -0.06);
+      // 刀尖
+      add(g, new THREE.ConeGeometry(0.028, 0.11, 4), blade, 0, 0.052, -0.3, -Math.PI / 2 - 0.08, Math.PI / 4, 0);
+      // 刀背凸起
+      add(g, B(0.036, 0.016, 0.1), dark, 0, 0.068, -0.1, -0.06);
       muzzle.position.z = -0.38;
       break;
     }
@@ -179,11 +190,24 @@ export function buildViewmodel(id) {
       break;
     }
     case 'zclaw': {
-      const clawMat = mat(0xd8d0c0, { roughness: 0.45 });
+      // 尸爪：三根外张的利爪 + 掌部 + 腕部，爪尖偏暖白，掌部偏腐绿。
+      const clawMat = mat(0xe4dccb, { roughness: 0.35, metalness: 0.1 });
+      const flesh = mat(0x5d7434, { roughness: 0.85 });
+      const wound = mat(0x8a3f3f, { roughness: 0.7 });
+      // 掌部
+      add(g, B(0.13, 0.14, 0.13), flesh, 0, 0, 0.01);
+      // 腕部
+      add(g, B(0.09, 0.10, 0.14), flesh, 0, -0.005, 0.12);
+      // 三根爪：根粗尖细，向前并向外张开
       for (let i = -1; i <= 1; i++) {
-        add(g, new THREE.ConeGeometry(0.02, 0.24, 6), clawMat, i * 0.045, -0.02, -0.22, 1.1, 0, i * 0.12);
+        const outward = i * 0.055;
+        // 指节
+        add(g, B(0.034, 0.05, 0.07), flesh, outward, -0.012, -0.058, 0.15, i * 0.1, 0);
+        // 爪身
+        add(g, new THREE.ConeGeometry(0.021, 0.26, 6), clawMat, outward * 1.55, -0.005, -0.21, 1.28, i * 0.16, i * 0.14);
       }
-      add(g, B(0.12, 0.13, 0.12), mat(0x4d6630), 0, 0, 0);
+      // 掌心血痕
+      add(g, B(0.05, 0.012, 0.05), wound, 0, 0.072, 0.0);
       muzzle.position.z = -0.26;
       break;
     }

@@ -74,10 +74,10 @@ export const PHYS = Object.freeze({
   SPEED: 4.6,          // 人类基础速度
   SPRINT_MULT: 1.3,
   CROUCH_MULT: 0.55,
-  ZOMBIE_SPEED: 5.4,
+  ZOMBIE_SPEED: 4.95,  // 略快于人类基础速度（4.6），但不足以单靠速度贴脸
   ZOMBIE_JUMP: 6.9,
-  ZOMBIE_HP: 600,
-  ZOMBIE_REGEN: 4,
+  ZOMBIE_HP: 420,
+  ZOMBIE_REGEN: 2.5,
   ZOMBIE_SLOW_TICKS: 15,
   ZOMBIE_SLOW_MULT: 0.55,
   JUMP: 5.8,
@@ -95,16 +95,18 @@ export const WEAPON_SLOTS = Object.freeze({
 // 生化模式“琉璃决战”末段：最后 60 秒全员变身、不再复活
 export const FINALE = Object.freeze({
   DURATION: 60,
+  // 猎人：高血量高伤害，但伤害倍率下调，避免 60 秒决战在几秒内一边倒结束
   HUNTER_HP: 500,
   HUNTER_ARMOR: 100,
-  HUNTER_DAMAGE: 3.0,
-  KING_HP: 1200,
-  KING_ARMOR: 80,
-  KING_DAMAGE: 2.6, // 必须略低于琉璃猎人
-  SERVANT_HP: 800,
-  SERVANT_ARMOR: 40,
-  SERVANT_DAMAGE: 1.6,
-  ZOMBIE_HP_MULT: 1.3, // 其余丧尸仅小幅提升血量
+  HUNTER_DAMAGE: 1.7,
+  // 尸王 / 尸仆：血量与伤害提高，作为决战的"boss"能真正扛住猎人集火
+  KING_HP: 2600,
+  KING_ARMOR: 120,
+  KING_DAMAGE: 1.6, // 必须略低于琉璃猎人
+  SERVANT_HP: 1500,
+  SERVANT_ARMOR: 70,
+  SERVANT_DAMAGE: 1.25,
+  ZOMBIE_HP_MULT: 2.0, // 其余丧尸提升血量，避免决战瞬间被清场
 });
 
 // 生化模式丧尸加速技能（F 键）

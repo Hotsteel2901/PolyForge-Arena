@@ -136,7 +136,7 @@ export class Hud {
     // 生化丧尸 F 加速技能指示
     if (this.mode === 'zombie' && entry.zb) {
       this.r.skill.classList.remove('hidden');
-      const cd = entry.sc ?? 0;
+      const cd = entry.sk ?? 0;
       this.r.skill.textContent = cd > 0 ? `F 加速 · ${cd}s` : 'F 加速 · 就绪';
       this.r.skill.classList.toggle('ready', cd === 0);
     } else {
@@ -350,7 +350,8 @@ export class Hud {
   }
 
   showUseProgress(action, pct) {
-    this.r.useProgressLabel.textContent = action === 'defuse' ? '拆除炸弹…' : '安放炸弹…';
+    const labels = { defuse: '拆除炸弹…', plant: '安放炸弹…', supply: '补给中…' };
+    this.r.useProgressLabel.textContent = labels[action] || '使用中…';
     this.r.useProgressBar.style.width = Math.round(pct * 100) + '%';
     this.r.useProgress.classList.remove('hidden');
   }

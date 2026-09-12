@@ -14,6 +14,11 @@ import { ZombieMatch } from './modes/zombie-core.js';
 
 const BOT_NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliet'];
 
+// 整场取胜所需回合数（拆弹 = 先到 8 分；生化 = 一方先拿到 8 分且领先对手）
+const ROUNDS_TO_WIN = 8;
+// 生化模式单局时长（秒）。需大于 FINALE.DURATION，保证"最后 60 秒琉璃决战"有足够铺垫。
+const ZOMBIE_DURATION = 330;
+
 export class Room {
   constructor({ id, mode, mapId, maxPlayers = 12, botCount = 8, config = {} }) {
     this.id = id;
@@ -230,7 +235,7 @@ export class Room {
       // 记录上一回合是否存活（进入购买阶段时不会复活，round_start 前 alive 即存活状态）
       const survived = new Map();
       for (const p of all) survived.set(p.id, p.alive);
-      const players = all.filter((p) => !p.isBot || true);
+      const players = all;
       players.forEach((p) => {
         p.isZombie = false;
         p.team = p.teamPref === 'ct' ? TEAM.CT : p.teamPref === 't' ? TEAM.T : TEAM.NONE;
@@ -281,7 +286,8 @@ export class Room {
         p.zombieMoneyInit = true;
         p.zombieSince = 0;
       });
-      const zombieCount = Math.max(1, Math.min(3, Math.floor(all.length * 0.2), all.length));
+      // 初始僵尸数量：约 18%，单局最多 2 只，避免开局就形成压倒性数量优势
+      const zombieCount = Math.max(1, Math.min(2, Math.floor(all.length * 0.18), all.length));
       const pool = [...all].sort(() => Math.random() - 0.5);
       for (let i = 0; i < zombieCount; i++) {
         pool[i].isZombie = true;
@@ -289,7 +295,7 @@ export class Room {
       }
       this.spawnAll();
       this.core = new ZombieMatch({
-        duration: 300,
+        duration: ZOMBIE_DURATION,
         onEvent: (e) => this.handleRoundEvent(e),
       });
       const humans = [...all].filter((p) => !p.isZombie);
@@ -361,33 +367,39 @@ export class Room {
       this.broadcast({ type: 'round_start', mode: this.mode, round: this.roundNum, ...e });
     } else if (e.type === 'round_end') {
       const winner = e.winner;
+      // 先累计本回合比分（两模式共用）
       if (this.mode === MODE.DEFUSAL) {
         this.matchScore[winner] += 1;
         for (const p of this.players.values()) {
           const won = p.team === winner;
           p.money = Math.min(MONEY_CAP, p.money + (won ? WIN_REWARD : LOSS_REWARD));
         }
-        const matchWinner = this.matchScore[winner] >= 8 ? winner : null;
+      } else if (winner === 'DRAW') {
+        this.matchScore.HUMAN += 1;
+        this.matchScore.ZOMBIE += 1;
+      } else if (this.matchScore[winner] !== undefined) {
+        this.matchScore[winner] += 1;
+      }
+      // 生化：人类与僵尸是同一枚硬币的两面，每回合双方都记 1 分，
+      // 这样 sc.HUMAN + sc.ZOMBIE 恒等于已结束回合数（与实际回合数一致）；
+      // 拆弹：按阵营计分，先到 ROUNDS_TO_WIN_ROUNDS 分者赢下整场。
+      const score = this.matchScore;
+      const isDraw = winner === 'DRAW';
+      const matchWinner = isDraw
+        ? null
+        : this.mode === MODE.DEFUSAL
+          ? (score[winner] >= ROUNDS_TO_WIN ? winner : null)
+          : (score[winner] >= ROUNDS_TO_WIN && score[winner] > score[winner === 'HUMAN' ? 'ZOMBIE' : 'HUMAN'] ? winner : null);
+      const nextRoundIn = matchWinner ? 5 : 10;
+      if (this.mode === MODE.DEFUSAL) {
         this.phase = matchWinner ? 'over' : 'buy';
-        this.buyUntil = matchWinner ? 0 : this.time + 10;
-        this.roundEndAt = this.time + (matchWinner ? 5 : 10);
-        this.broadcast({ type: 'round_end', winner, reason: e.reason, round: this.roundNum, scores: this.matchScore, matchWinner, nextRoundIn: matchWinner ? 5 : 10 });
-        if (matchWinner) {
-          this.matchEndAt = this.time + 8;
-          this.broadcast({ type: 'match_end', winner: matchWinner, scores: this.matchScore });
-        }
-      } else {
-        const matchWinner = e.winner;
-        if (e.winner === 'DRAW') {
-          this.matchScore.HUMAN += 1;
-          this.matchScore.ZOMBIE += 1;
-        } else {
-          this.matchScore[e.winner] += 1;
-        }
-        this.broadcast({ type: 'round_end', winner, reason: e.reason, round: this.roundNum, scores: this.matchScore, matchWinner });
+        this.buyUntil = matchWinner ? 0 : this.time + nextRoundIn;
+      }
+      this.roundEndAt = this.time + nextRoundIn;
+      this.broadcast({ type: 'round_end', winner, reason: e.reason, round: this.roundNum, scores: score, matchWinner, nextRoundIn });
+      if (matchWinner) {
         this.matchEndAt = this.time + 8;
-        this.roundEndAt = this.time + 5;
-        this.broadcast({ type: 'match_end', winner: matchWinner, scores: this.matchScore });
+        this.broadcast({ type: 'match_end', winner: matchWinner, scores: score });
       }
     } else if (e.type === 'bomb_planted') {
       this.bomb.planted = true;
@@ -446,6 +458,8 @@ export class Room {
       }
     }
     this.broadcast({ type: 'finale_start', hunters: humans.length, king: king?.name, servants });
+    // 同步到本地事件总线（Mod / 服务端逻辑可监听；此前只广播给客户端）
+    this.emit('finale_start', { hunters: humans.length, king: king?.name, servants, zombies: zombies.length });
     this.say(
       `琉璃之力觉醒！${humans.length} 名人类化为琉璃猎人` +
       (king ? `，${king.name} 化为尸王` : '') +
@@ -500,8 +514,10 @@ export class Room {
         p.boostUntil = 0;
         p.speedOverride = undefined;
       }
-      if (p.isBot) tickBot(this, p);
-      if (p.isBot) p.inputAt = this.time;
+      if (p.isBot) {
+        tickBot(this, p);
+        p.inputAt = this.time;
+      }
       this.processInput(p);
       movePlayer(p, p.input, dt, this.map.colliders);
       if (p.history) {
@@ -537,10 +553,27 @@ export class Room {
       const aliveHuman = [...this.players.values()].filter((p) => p.alive && !p.isZombie);
       const aliveZombie = [...this.players.values()].filter((p) => p.alive && p.isZombie);
       // 最后 60 秒：琉璃决战激活（全员变身、不再复活）
+      // 注意：必须在胜负判定之前触发。旧顺序下"丧尸全灭"会先结束回合，
+      // 导致决战在整个游戏生命周期内几乎不可能出现（实测 0/12）。
       if (!this.finaleActive && this.core.timeLeft <= FINALE.DURATION) {
         this.finaleActive = true;
         this.noRespawn = true;
         if (aliveHuman.length > 0 || aliveZombie.length > 0) this.activateFinale();
+      }
+      // 丧尸全灭时：决战阶段开始前给予一次"最后感染"补位，让决战有机会展开；
+      // 决战已激活则按原逻辑由决战判定接管。
+      if (!this.finaleActive && aliveZombie.length === 0 && aliveHuman.length > 0) {
+        const pick = aliveHuman[Math.floor(Math.random() * aliveHuman.length)];
+        pick.isZombie = true;
+        pick.team = TEAM.ZOMBIE;
+        pick.zombieSince = this.time;
+        pick.hp = PHYS.ZOMBIE_HP;
+        pick.maxHp = PHYS.ZOMBIE_HP;
+        pick.armor = 0;
+        pick.speedOverride = undefined;
+        giveLoadout(pick, this.mode, TEAM.ZOMBIE);
+        this.broadcast({ type: 'infected', id: pick.id });
+        this.say(`${pick.name} 被选中为新僵尸！`);
       }
       if (this.finaleActive) {
         if (aliveZombie.length === 0 && aliveHuman.length === 0) {
@@ -550,21 +583,8 @@ export class Room {
         } else if (aliveHuman.length === 0) {
           this.core.end('ZOMBIE', 'infected_all');
         }
-      } else {
-        if (aliveHuman.length === 0) this.core.end('ZOMBIE', 'infected_all');
-        if (aliveZombie.length === 0 && aliveHuman.length > 0) {
-          const pick = aliveHuman[Math.floor(Math.random() * aliveHuman.length)];
-          pick.isZombie = true;
-          pick.team = TEAM.ZOMBIE;
-          pick.zombieSince = this.time;
-          pick.hp = PHYS.ZOMBIE_HP;
-          pick.maxHp = PHYS.ZOMBIE_HP;
-          pick.armor = 0;
-          pick.speedOverride = undefined;
-          giveLoadout(pick, this.mode, TEAM.ZOMBIE);
-          this.broadcast({ type: 'infected', id: pick.id });
-          this.say(`${pick.name} 被选中为新僵尸！`);
-        }
+      } else if (aliveHuman.length === 0) {
+        this.core.end('ZOMBIE', 'infected_all');
       }
     }
 
@@ -758,9 +778,11 @@ export class Room {
           box.respawnAt = this.time + box.respawn;
           this.sendTo(p.id, { type: 'ammo_refill' });
           this.broadcast({ type: 'ammo_box', id: p.id, pos: box.pos });
+          p.useProgress = 1;
+          this.sendTo(p.id, { type: 'use_progress', action: 'supply', progress: 1 });
         }
       }
-      // 回血箱：人类接近按住 E 回复生命
+      // 回血箱：人类接近按住 E 回复生命（进度条给一次满格反馈）
       if (p.hp < p.maxHp) {
         const hb = this.healthBoxes.find((b) => b.available && Math.hypot(b.pos.x - p.pos.x, b.pos.z - p.pos.z) < 2);
         if (hb) {
@@ -770,8 +792,11 @@ export class Room {
           hb.respawnAt = this.time + hb.respawn;
           this.sendTo(p.id, { type: 'health_refill', hp: Math.ceil(p.hp) });
           this.broadcast({ type: 'health_box', id: p.id, pos: hb.pos, amount: Math.round(p.hp - before) });
+          p.useProgress = 1;
+          this.sendTo(p.id, { type: 'use_progress', action: 'supply', progress: 1 });
         }
       }
+      p.useTarget = p.useProgress ? 'supply' : null;
     }
   }
 
@@ -933,7 +958,17 @@ export class Room {
   }
 
   resetEconomy() {
-    for (const p of this.players.values()) p.money = START_MONEY;
+    for (const p of this.players.values()) {
+      if (this.mode === MODE.ZOMBIE) {
+        // 生化模式无购买阶段：整场结束后给所有人重置到初始资金
+        p.money = ZOMBIE_START_MONEY;
+      } else {
+        p.money = START_MONEY;
+        p.boughtItems = [];
+      }
+    }
+    this.phase = 'live';
+    this.buyUntil = 0;
   }
 
   beginBuyPhase() {
@@ -987,7 +1022,8 @@ export class Room {
         g: p.grenadeCount,
         mo: p.money,
         bi: p.boughtItems.map((r) => r.item),
-        sc: Math.max(0, Math.ceil((p.skillReadyAt || 0) - this.time)),
+        // 技能冷却（秒）：必须用独立字段，曾经误用 sc 覆盖了得分
+        sk: Math.max(0, Math.ceil((p.skillReadyAt || 0) - this.time)),
         bo: p.boostUntil && this.time < p.boostUntil ? 1 : 0,
       });
     }

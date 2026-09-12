@@ -6,6 +6,9 @@ import { applyArmor } from '../shared/math.js';
 import { PositionHistory } from './history.js';
 import { START_MONEY, MONEY_CAP, KILL_REWARD, ZOMBIE_KILL_REWARD, ZOMBIE_START_MONEY } from '../shared/economy.js';
 
+// 被感染后到能以僵尸身份重生的间隔（秒）：给人类喘息窗口，抑制感染雪崩
+const ZOMBIE_INFECT_DELAY = 8;
+
 export function createPlayer(id, name, { isBot = false } = {}) {
   return {
     id,
@@ -63,7 +66,8 @@ export function giveLoadout(p, mode, team) {
   p.weaponMoveMult = 1;
   p.grenadeCount = 0;
   if (p.isZombie) {
-    const claw = { ...BUILTIN_WEAPONS.fang, id: 'zclaw', name: '尸爪', range: 2.3, damage: 60, fireRate: 68, moveMult: 1 };
+    // 4 爪击杀满血人类（100HP）：单爪伤害略低于人类满血，避免 2 爪秒杀过于惩罚
+    const claw = { ...BUILTIN_WEAPONS.fang, id: 'zclaw', name: '尸爪', range: 2.3, damage: 34, fireRate: 68, moveMult: 1 };
     p.weapons.set(0, new WeaponRuntime(claw));
     p.activeSlot = 0;
     return;
@@ -76,8 +80,8 @@ export function giveLoadout(p, mode, team) {
     p.grenadeCount = 1;
     p.activeSlot = 1; // 刚进房间 / 刚创建房间时手持手枪
   } else {
-    const primary = mode === 'defusal' ? (team === TEAM.T ? BUILTIN_WEAPONS.arc17 : BUILTIN_WEAPONS.vx9) : BUILTIN_WEAPONS.arc17;
-    p.weapons.set(2, new WeaponRuntime(primary));
+    // 生化模式：开局自带免费主武器（拆弹模式则无，需购买）
+    p.weapons.set(2, new WeaponRuntime(BUILTIN_WEAPONS.arc17));
     p.grenadeCount = 3;
     p.activeSlot = 2;
   }
@@ -193,11 +197,12 @@ export function killPlayer(room, killer, victim, info = {}) {
       victim.isZombie = true;
       victim.team = TEAM.ZOMBIE;
       victim.zombieSince = room.time;
-      victim.respawnAt = room.time + 3.5;
+      // 感染后有一段无法行动的"转化"时间，避免击杀瞬间立刻反扑造成雪崩式感染
+      victim.respawnAt = room.time + ZOMBIE_INFECT_DELAY;
       room.core?.infect(victim.id);
       room.broadcast({ type: 'infected', id: victim.id });
     } else {
-      victim.respawnAt = room.time + 4;
+      victim.respawnAt = room.time + 6;
     }
     return;
   }
