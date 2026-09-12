@@ -962,6 +962,9 @@ function applySelfState(e) {
   // 技能按钮（丧尸加速）只在生化模式且自身为丧尸时出现，
   // 判定标准与 hud.setSelf 里的 F 加速指示一致，避免拆弹模式挂着无效按钮。
   state.touchUI?.setSkillVisible?.(state.mode === 'zombie' && !!e.zb);
+  // 切枪按钮：丧尸只有尸爪，切枪无意义（localCycleWeapon 对丧尸直接 return），
+  // 置灰避免玩家反复点击却毫无反馈。
+  state.touchUI?.setSwitchEnabled?.(!e.zb);
 }
 
 // 记住主武器（用于复活/切枪后保持上一把枪）：
@@ -1013,15 +1016,15 @@ function slotOfWeapon(id) {
 }
 
 function localCycleWeapon(dir) {
-  if (state.self.isZombie) {
-    state.pendingSlot = 0;
-    input.swdQueued = 0;
-    return;
-  }
-  const cur = slotOfWeapon(state.selfWeaponId);
-  state.pendingSlot = (cur + (dir > 0 ? 1 : 3)) % 4;
-  applyLocalSwitch(state.pendingSlot);
-  input.swdQueued = 0; // 事件已消费，下一帧不得再次循环
+  // 丧尸只有尸爪，无从可切。旧实现设 pendingSlot=0，随后 weaponIdForSlot(0)
+  // 又返回 zclaw（与当前武器相同），applyLocalSwitch 直接 return false —— 死路，
+  // 按了永远没反应。这里直接返回，UI 侧同步把切枪键置灰。
+  if (state.self.isZombie) return;
+  // 只发送循环方向，由房主决定切到哪把枪。
+  // 房主才知道玩家真实持有哪些槽位（刚出生只有主武器+手枪），
+  // 客户端硬编码 4 槽循环会切到空槽，被 host/room.js 的无效切枪回执打回，
+  // 表现为"按了没反应"的闪烁。此处不做本地推测，等房主 switch 回执。
+  input.swdQueued = dir > 0 ? 1 : -1;
 }
 
 function applyLocalSwitch(slot) {
@@ -1045,10 +1048,10 @@ function updateSelf(dt, now) {
   if (frame.sw >= 0) {
     state.pendingSlot = null; // 显式切枪优先于未发送的滚轮目标
     applyLocalSwitch(frame.sw);
-  } else if (frame.swd !== 0) {
-    // 滚轮：事件回调已即时循环（并清空队列）；此处兜底处理未被回调消费的情况
-    localCycleWeapon(frame.swd > 0 ? 1 : -1);
   }
+  // frame.swd 不在此处处理：滚轮与触控切枪都已由 localCycleWeapon 设置
+  // （它只把方向交给房主，本地不做乐观切换）。若这里再循环一次，
+  // 一次点击会切两把。房主的 switch 回执会更新 selfWeaponId。
   s.crouch = !!frame.c;
   s.yaw = frame.yaw;
   s.pitch = frame.pitch;

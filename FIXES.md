@@ -1,12 +1,13 @@
 # PolyForge Arena 修复与优化报告
 
-对 `Hotsteel2901/PolyForge-Arena` 做了完整代码审计（37 个文件、约 8700 行），
-修复了 **24 处缺陷**，其中 5 处为影响核心玩法或移动端可用性的严重问题。
+对 `Hotsteel2901/PolyForge-Arena` 做了完整代码审计（41 个文件、约 9200 行），
+修复了 **28 处缺陷**，其中 6 处为影响核心玩法或移动端可用性的严重问题。
 所有改动均经无头模拟与真实浏览器回归验证。
 
-- 第二部分（[第六节](#六第二批修复手感与表现层)）：近战枪口焰、近战模型与挥砍动作、
+- 第二批（[第六节](#六第二批修复手感与表现层)）：近战枪口焰、近战模型与挥砍动作、
   完整换弹动画、行走抖动
-- 第三部分（[第八节](#八第三批修复移动端-ui-与操作体验)）：移动端 UI 与操作体验
+- 第三批（[第八节](#八第三批修复移动端-ui-与操作体验)）：移动端 UI 与操作体验
+- 第四批（[第十节](#十第四批修复切枪失效--动态摇杆)）：切枪失效修复、动态摇杆
 
 ---
 
@@ -414,10 +415,193 @@ if (inside) press(); else release();
 
 ---
 
-## 十、已知限制
+## 十、第四批修复（切枪失效 + 动态摇杆）
+
+本批源于实机反馈：**移动端无法切枪**、**固定摇杆操作难受**。
+
+### 25. `tap()` 复用 `hold()` 导致按钮抖动时重复触发 ★切枪失效主因
+
+`js/touch.js` 的 `hold()` 为支持「滑动跟手」（手指滑出按钮仍保持按下），
+在 `touchmove` 里重新判定 `inside`，回到按钮内就再调一次 `press()`：
+
+```js
+const press = () => { if (down) return; down = true; ...; onStart(); };
+el.addEventListener('touchmove', (e) => {
+  if (inside) press(); else release();   // ← 滑回按钮内会再触发一次 onStart
+});
+```
+
+而 `tap()` 当时只是 `hold(el, fn, () => {}, key)`，于是轻点类按钮的 `onStart`
+变成**可重复触发**。但它们的业务语义是**边沿触发**（按一次 = 干一件事）。
+
+**实测**（`tap-compare.mjs`，同一段触摸：按下 → 滑出 → 滑回 ×3）：
+
+| 实现 | 一次触摸的触发次数 | 表现 |
+|---|---|---|
+| 旧（`tap` 复用 `hold`） | **4 次** | 连切 4 把枪，最终又绕回原武器 → 「切不了枪」 |
+| 新（独立边沿触发） | **1 次** | 正常切一把 |
+
+影响面：
+
+- `jump` / `reload` / `skill` → 重复动作，玩家不易察觉
+- `ads` / `crouch` → `input.ads = !input.ads` 来回翻转，表现为「按了没反应」
+- `switch` → 连切多把后绕回原样，**表现为切枪完全失效**
+
+触摸屏上手指几乎不可能完全静止，故该 bug 在真机上必然出现。
+
+**修复**：把 `tap` 从 `hold` 里拆出，独立实现边沿触发 ——
+同一手势只认一次，抬手/取消后才复位，不再挂 `touchmove`：
+
+```js
+const tap = (el, fn, key) => {
+  let fired = false;
+  el.addEventListener('touchstart', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (fired) return;        // 同一手势内不重复触发
+    fired = true;
+    el.classList.add('pressed');
+    if (navigator.vibrate) navigator.vibrate(12);
+    window.__touchDebug[key]++;
+    fn();
+  }, { passive: false });
+  const reset = () => { fired = false; el.classList.remove('pressed'); };
+  el.addEventListener('touchend', (e) => { e.stopPropagation(); reset(); }, { passive: false });
+  el.addEventListener('touchcancel', reset);
+};
+```
+
+`hold` 的滑动跟手保持不变（射击键必需），两者语义彻底分离。
+
+### 26. 客户端本地环切与房主持有武器不一致 ★切枪失效第二个成因
+
+`js/main.js` 的 `localCycleWeapon()` 在客户端硬编码 4 槽循环：
+
+```js
+const cur = slotOfWeapon(state.selfWeaponId);
+state.pendingSlot = (cur + (dir > 0 ? 1 : 3)) % 4;   // ← 客户端认为有 4 把枪
+applyLocalSwitch(state.pendingSlot);
+```
+
+但房主端 `host/room.js` 只在**实际持有的槽位**里循环：
+
+```js
+const slots = [...p.weapons.keys()].sort((a, b) => a - b);
+if (slots.length > 1) { ... p.activeSlot = slots[(idx + dir) % slots.length]; }
+```
+
+刚出生时玩家只有主武器（slot 2）+ 手枪（slot 1），共 2 把。客户端却按 4 槽切，
+乐观切到空槽后被房主的「无效切枪」分支回执打回：
+
+```js
+} else {
+  // 无效切枪（如无主武器时按 2）：立即回执当前武器，避免客户端乐观切枪后闪回
+  this.sendTo(p.id, { type: 'switch', w: cur?.def.id ?? '', slot: p.activeSlot, seq: p.switchSeq });
+}
+```
+
+表现为 **切枪闪烁后回到原武器**，与缺陷 25 叠加时完全无法切枪。
+
+**修复**：客户端不再猜测目标，「下一把是哪把」交由房主决定
+（只有房主知道玩家真实持有哪些武器）：
+
+```js
+function localCycleWeapon(dir) {
+  if (state.self.isZombie) return;
+  // 只发送循环方向，由房主决定切到哪把枪
+  input.swdQueued = dir > 0 ? 1 : -1;
+}
+```
+
+同时移除 `updateSelf()` 里对 `frame.swd` 的兜底重复消费 ——
+回调与逐帧两处都处理会导致**一次点击切两把**。
+`input.js` 的 `wheel()` 也不再直接写 `swdQueued`，统一由
+`localCycleWeapon` 单一决策点写入。
+
+### 27. 丧尸形态下切枪是死路
+
+`localCycleWeapon` 的丧尸分支设 `pendingSlot = 0`，而 `weaponIdForSlot(0)`
+对丧尸返回 `'zclaw'`（与当前武器相同）→ `applyLocalSwitch` 返回 `false`，
+什么也不发生。按「切枪」永远无效。
+
+**修复**：丧尸形态直接 `return`，不设 `pendingSlot`；
+UI 侧新增 `ui.setSwitchEnabled(on)`，`main.js` 按 `!e.zb` 调用，
+丧尸时切枪键置灰且屏蔽 `pointer-events`，避免玩家反复点击却毫无反馈。
+
+### 28. 固定摇杆改为动态（浮动）摇杆
+
+**问题**：`#joy-base` 是左下角固定的 128px 圆，`touchstart` 绑在圆上，
+原点永远是圆心。三个痛点：
+
+1. 手指必须精准落进 128px 圆内，盲操常按空 → 该次触摸完全无响应
+2. 落点偏离圆心会立刻产生一个斜方向（原点在圆心，手指位置自带偏移）
+3. 圆固定占着屏幕左下角，视觉噪音大
+
+**修复**：改为动态摇杆（现代手游 FPS 标准做法）：
+
+- 新增 `#joy-zone` 热区，占屏 **42% 宽 × 55% 高**，贴左下角
+- 热区内**任意落点即摇杆原点**（`joyOrigin = { x: t.clientX, y: t.clientY }`）
+- **底座跟随手指**：底座用 `translate` 跟到手指当前位置，摇杆头始终居中；
+  方向向量仍由「相对起手点的位移」给出 —— 两者分离才可同时做到
+  「底座贴着手指」与「推程正确反映手指移动距离」
+- 抬手归位：`idleJoy()` 收起激活态，回到底左半透明提示圈待机
+
+热区层级放在 `#look-zone` 之后，同 z-index 下后者优先命中，
+确保热区内触摸不会被视角区分走。
+
+**测试中发现的坐标系缺陷**：底座是 `#joy-zone` 的子元素，`absolute`
+定位相对的是 **zone 而非视口**，故 `translate(x, y)` 必须减去 zone 原点。
+初版漏了这一步，实测底座中心比落点**低 175px**（恰好等于 zone 顶边 y），
+摇杆会整个跑到屏幕外。已修正为：
+
+```js
+const zr = joyZone.getBoundingClientRect();
+joyBase.style.transform =
+  `translate(${x - zr.left}px, ${y - zr.top}px) translate(-50%, -50%)`;
+```
+
+修复后实测底座中心与落点**完全重合**（180,300 → 180.0,300.0）。
+
+同时移除矮屏媒体查询里对 `#joy-base` 的 `transform: scale()` ——
+它会覆盖 JS 写入的 `translate`，导致底座瞬间弹回原位。
+
+---
+
+## 十一、第四批验证方式
+
+| 层 | 脚本 | 内容 | 结果 |
+|---|---|---|---|
+| 边沿触发 | `tap-edge.mjs` | 从真实源码抽取 `hold`/`tap`，断言抖动/滑出滑回/连点/cancel 下的触发次数 | **16/16** |
+| 切枪流程 | `switch-flow.mjs` | 断言只发方向不做本地推测、丧尸形态无操作、单次点击只切一把、房主按实际槽位循环 | **27/27** |
+| 动态摇杆 | `joy-dynamic.mjs` | 热区结构与层级、落点即原点、底座跟手、坐标系修正、抬手归位、方向与推程 | **48/48** |
+| 真实浏览器 | `mobile-fix-verify.mjs` | 移动视口实测热区命中、底座中心与落点重合、底座跟手、切枪边沿触发 | **25/25** |
+
+**关键回归对照**（`tap-compare.mjs`）：同一段触摸手势下，
+旧实现触发 **4 次**、新实现触发 **1 次**，确认修复直达根因。
+
+**回归套件**（全部通过，确认前四批未相互破坏）：
+
+| 套件 | 结果 |
+|---|---|
+| `mobile-geom.mjs` 布局几何 | 21/21 |
+| `mobile-input.mjs` 输入链路 | 25/25 |
+| `mobile-browser.mjs` 浏览器交互（横屏 + 竖屏） | 48/48 |
+| `sim.mjs` 服务端（`sc === score`） | 通过 |
+| `desktop-check.mjs` 桌面端 | 不创建触控 UI |
+| `swing.mjs` / `jitter.mjs` | 挥砍曲线与抖动抑制未变 |
+| 全仓库语法 | 41 个 JS 文件通过 |
+
+> 测试期间发现并修正了 2 个测试自身的缺陷（注释中的关键字被误判为代码、
+> 坐标系断言未随实现更新），以及 1 个实现缺陷（摇杆底座坐标系偏移 175px）。
+
+---
+
+## 十二、已知限制
 
 - 视觉效果（挥砍弧线、换弹动画、模型造型、按钮观感）为逐帧数值、CSS 几何与
   无头浏览器验证，**未经真人真机试玩确认** —— 建议实机开一局验收手感
 - P2P 链路未在沙箱内验证，网络同步相关的改动仅做静态调用链核对
+  （第四批的切枪改动涉及房主回执，建议实机双端验证）
 - 全屏/横屏锁定依赖浏览器支持，iOS Safari 需用户手势（已提供按钮兜底）
 - 移动端物理与伤害数值未改动，沿用第二批标定结果
+- 动态摇杆的手感参数（热区占比 42%×55%、`JOY_MAX` 54px、死区 8px）为
+  经验值，实机若感觉推程偏长/偏短可调 `js/touch.js` 顶部常量

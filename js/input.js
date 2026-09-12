@@ -128,7 +128,8 @@ export class Input {
   wheel(e) {
     if (this.locked && !this.chatOpen) {
       const dir = e.deltaY > 0 ? 1 : -1;
-      this.swdQueued = dir;
+      // 只通知回调；swdQueued 由 localCycleWeapon 统一设置（它是唯一决策点，
+      // 且会处理丧尸形态等边界）。这里若也赋值，等于给同一动作留了第二条写入路径。
       if (this.onWheel) this.onWheel(dir);
     }
   }
