@@ -13,6 +13,12 @@ const SPRINT_ON = 0.85;  // 推程超过此比例触发疾跑
 const SPRINT_OFF = 0.7;  // 回落到此比例以下取消疾跑（回滞，避免边界抖动）
 const TOUCH_PAD = 28;    // 滑动跟手容差（px），约半根手指宽
 
+// 动态摇杆热区（屏幕左下角占比）。
+// 旧实现是固定圆：手指必须落在 128px 圆内，盲操常按空，且落点偏离圆心
+// 会立刻产生一个斜方向。改为热区内"落点即原点"后可任意位置起手。
+const JOY_HOT_W = 0.42;
+const JOY_HOT_H = 0.55;
+
 export function setupTouch(input, onLook, opts = {}) {
   if (!('ontouchstart' in window) && navigator.maxTouchPoints === 0) return null;
   // 诊断计数器：便于在真机/模拟器上确认触控事件是否到达
@@ -45,7 +51,9 @@ export function setupTouch(input, onLook, opts = {}) {
   ui.id = 'touch-ui';
   ui.innerHTML = `
     <div class="zone" id="look-zone"></div>
-    <div class="zone" id="joy-base"><div id="joy-knob"></div></div>
+    <div class="zone" id="joy-zone">
+      <div id="joy-base"><div id="joy-knob"></div></div>
+    </div>
     <div id="btn-cluster">
       <div class="zone touch-btn" id="fire-btn"><span class="btn-label">射击</span></div>
       <div class="zone touch-btn" id="use-btn"><span class="btn-label">互动</span></div>
@@ -66,6 +74,7 @@ export function setupTouch(input, onLook, opts = {}) {
   `;
   document.getElementById('app').appendChild(ui);
 
+  const joyZone = document.getElementById('joy-zone');
   const joyBase = document.getElementById('joy-base');
   const knob = document.getElementById('joy-knob');
   const lookZone = document.getElementById('look-zone');
@@ -91,10 +100,23 @@ export function setupTouch(input, onLook, opts = {}) {
   let sprinting = false;
 
   // 摇杆：方向位 + 推程。推程用于自动疾跑（旧实现丢弃推程，导致触屏无法疾跑）。
-  const setJoy = (dx, dy) => {
+  //
+  // 动态摇杆：底座跟随手指 —— 底座整体挪到手指当前落点，摇杆头始终居中，
+  // 方向向量由"手指相对起手点的位移"给出。这样手指滑到哪底座就跟到哪，
+  // 视觉上与手指始终贴合，且不会出现固定圆心时"按歪一点方向就斜"的问题。
+  //
+  // 注意坐标系：#joy-base 是 #joy-zone 的子元素，absolute 定位相对的是
+  // #joy-zone（而非视口）。故 translate 必须减去 zone 原点，否则在任意
+  // 非全屏热区下都会整体偏移 zone.top（实测偏 175px，摇杆会跑到屏幕外）。
+  const setJoy = (dx, dy, x, y) => {
     window.__touchDebug.joyMoves++;
     window.__touchDebug.joyDX += dx;
     window.__touchDebug.joyDY += dy;
+    if (x !== undefined) {
+      const zr = joyZone.getBoundingClientRect();
+      joyBase.style.transform =
+        `translate(${x - zr.left}px, ${y - zr.top}px) translate(-50%, -50%)`;
+    }
     const len = Math.hypot(dx, dy);
     const cl = Math.min(len, JOY_MAX);
     const nx = (dx / (len || 1)) * cl;
@@ -127,32 +149,44 @@ export function setupTouch(input, onLook, opts = {}) {
     }
   };
 
-  joyBase.addEventListener('touchstart', (e) => {
+  // 摇杆待机态：回到左下角提示圈位置（不显示在起手处，避免留残影）
+  const idleJoy = () => {
+    joyZone.classList.remove('active');
+    joyBase.style.transform = '';
+    knob.style.transform = 'translate(-50%, -50%)';
+    input.mvTouch = [0, 0, 0, 0];
+    input.mvMag = 0;
+    setSprint(false);
+  };
+
+  // 热区内任意落点即摇杆原点。起手点固定下来后，后续 move 都以它为基准算方向。
+  joyZone.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    window.__touchDebug.joy++;
+    if (joyId !== null) return;      // 已在操控中，忽略第二根手指
     const t = e.changedTouches[0];
+    window.__touchDebug.joy++;
     joyId = t.identifier;
-    const r = joyBase.getBoundingClientRect();
-    joyOrigin = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    setJoy(t.clientX - joyOrigin.x, t.clientY - joyOrigin.y);
+    joyOrigin = { x: t.clientX, y: t.clientY };
+    joyZone.classList.add('active');
+    setJoy(0, 0, joyOrigin.x, joyOrigin.y);
   }, { passive: false });
-  joyBase.addEventListener('touchmove', (e) => {
+  joyZone.addEventListener('touchmove', (e) => {
     const t = [...e.changedTouches].find((x) => x.identifier === joyId);
     if (!t) return;
     e.preventDefault();
-    setJoy(t.clientX - joyOrigin.x, t.clientY - joyOrigin.y);
+    // 底座跟到手指当前位置，方向仍相对起手点 —— 两者分离才能同时做到
+    // "底座贴着手指"和"推程正确反映手指移动距离"。
+    setJoy(t.clientX - joyOrigin.x, t.clientY - joyOrigin.y, t.clientX, t.clientY);
   }, { passive: false });
   const joyEnd = (e) => {
     if ([...e.changedTouches].some((x) => x.identifier === joyId)) {
       joyId = null;
-      knob.style.transform = 'translate(-50%,-50%)';
-      input.mvTouch = [0, 0, 0, 0];
-      input.mvMag = 0;
-      setSprint(false);
+      idleJoy();
     }
   };
-  joyBase.addEventListener('touchend', joyEnd);
-  joyBase.addEventListener('touchcancel', joyEnd);
+  joyZone.addEventListener('touchend', joyEnd);
+  joyZone.addEventListener('touchcancel', joyEnd);
+  idleJoy();
 
   lookZone.addEventListener('touchstart', (e) => {
     window.__touchDebug.look++;
@@ -223,7 +257,34 @@ export function setupTouch(input, onLook, opts = {}) {
     el.addEventListener('touchcancel', () => { touchId = null; release(); });
     return { release, el };
   };
-  const tap = (el, fn, key) => hold(el, fn, () => {}, key);
+  // 轻点型按钮：边沿触发（按下一次 = 动作一次）。
+  //
+  // 不能复用 hold() —— hold 的 press() 会在 touchmove 滑回按钮内时再次调用 onStart，
+  // 而 tap 的业务语义是边沿触发。手机上手指出微汗后几乎不可能完全静止，
+  // 一次触摸里"滑出→滑回"会被算成多次点击：
+  //   jump/reload/skill  → 重复动作（不易察觉）
+  //   ads/crouch         → input.ads = !input.ads 来回翻转，表现为"按了没反应"
+  //   切枪               → 连切多把，最后一秒又切回原样，表现为"切不了枪"
+  // 故此处独立实现：同一手势只认一次，不挂 touchmove。
+  const tap = (el, fn, key) => {
+    let fired = false;
+    el.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (fired) return;        // 同一手势内重复 touchstart 不重复触发
+      fired = true;
+      el.classList.add('pressed');
+      if (navigator.vibrate) navigator.vibrate(12);
+      window.__touchDebug[key]++;
+      fn();
+    }, { passive: false });
+    const reset = () => {
+      fired = false;            // 抬手/取消后才允许下一次触发
+      el.classList.remove('pressed');
+    };
+    el.addEventListener('touchend', (e) => { e.stopPropagation(); reset(); }, { passive: false });
+    el.addEventListener('touchcancel', reset);
+  };
 
   hold(fireBtn, () => { input.fire = true; }, () => { input.fire = false; }, 'fire');
   hold(useBtn, () => { input.useHeld = true; }, () => { input.useHeld = false; }, 'use');
@@ -295,6 +356,12 @@ export function setupTouch(input, onLook, opts = {}) {
   ui.setCrouch = (on) => {
     input.crouchHeld = on;
     crouchBtn.classList.toggle('active', on);
+  };
+  // 丧尸形态只有尸爪，切枪无意义（localCycleWeapon 对丧尸直接 return）。
+  // 置灰并屏蔽触摸，避免玩家反复点击却毫无反馈。
+  ui.setSwitchEnabled = (on) => {
+    switchBtn.classList.toggle('disabled', !on);
+    switchBtn.style.pointerEvents = on ? '' : 'none';
   };
   return ui;
 }

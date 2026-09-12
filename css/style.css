@@ -154,14 +154,38 @@ body {
 /* 触控层需盖在 HUD（z-index:10）之上，否则暂停按钮等会抢走命中 */
 #touch-ui { position: absolute; inset: 0; pointer-events: none; z-index: 12; }
 #touch-ui .zone { position: absolute; pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent; }
+#look-zone { left: 0; right: 0; top: 0; bottom: 0; }
+
+/* 动态摇杆热区：屏幕左下 42%宽 × 55%高，热区内任意落点即摇杆原点。
+ * 旧实现是固定 128px 圆，手指必须精准落进去，盲操常按空；
+ * 且落点偏离圆心会立刻产生一个斜方向。热区足够大后可盲操起手。
+ * 层级在 #look-zone 之后 → 同 z-index 下后出现的元素在上，摇杆优先拿到触摸。 */
+#joy-zone {
+  left: 0; bottom: 0;
+  width: 42%; height: 55%;
+  /* 必须透明且不吃事件以外的视觉：热区本身不可见，只有底座可见 */
+  background: transparent;
+}
+/* 底座：由 JS 用 translate 动态定位到手指落点，故 left/top 固定为 0。
+ * 待机态回到左下角缩成提示圈（见 #joy-zone:not(.active)）。 */
 #joy-base {
-  left: max(24px, env(safe-area-inset-left));
-  bottom: max(30px, calc(env(safe-area-inset-bottom) + 14px));
+  position: absolute; left: 0; top: 0;
   width: 128px; height: 128px; border-radius: 50%;
   background: rgba(255,255,255,.08); border: 2px solid rgba(255,255,255,.22);
+  transition: opacity .12s ease, width .12s ease, height .12s ease;
+  pointer-events: none;
 }
-#joy-knob { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 52px; height: 52px; border-radius: 50%; background: rgba(255,255,255,.28); }
-#look-zone { left: 0; right: 0; top: 0; bottom: 0; }
+/* 待机：缩小成小提示圈，停在左下角（热区起点附近），提示"这里可以起手" */
+#joy-zone:not(.active) #joy-base {
+  left: max(24px, env(safe-area-inset-left));
+  bottom: max(30px, calc(env(safe-area-inset-bottom) + 14px));
+  top: auto;
+  width: 84px; height: 84px;
+  opacity: .45;
+}
+/* 激活：底座贴到手指落点，恢复全尺寸 */
+#joy-zone.active #joy-base { opacity: .9; }
+#joy-knob { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 52px; height: 52px; border-radius: 50%; background: rgba(255,255,255,.28); pointer-events: none; }
 /* 核心触控簇：只放高频键（射击/跳/蹲/换弹/开镜/互动/切枪）。
  * 低频键（计分/聊天/商店/技能）已移到顶部操作条 —— 见 #touch-topbar。
  * 分频后按钮从 12 个减到 8 个，最远可及距离从 300px 降到 ~228px。 */
@@ -192,6 +216,8 @@ body {
 }
 /* 摇杆推满疾跑：边框变色提示已在疾跑 */
 #joy-base.sprinting { border-color: rgba(150,255,190,.85); box-shadow: 0 0 14px rgba(120,255,170,.4); }
+/* 禁用态：丧尸只有尸爪，切枪键置灰（JS 侧同时屏蔽 pointer-events） */
+.touch-btn.disabled { opacity: .32; filter: grayscale(1); }
 
 /* 顶部操作条：低频键（全屏/计分/聊天/商店/技能），竖排贴右上角，
  * 与 #pause-btn 同侧但下移，避开状态栏与 HUD 顶栏。 */
@@ -238,14 +264,14 @@ body {
   #chat-wrap { bottom: 300px; }
 }
 
-/* 竖屏（窄屏）：核心簇与摇杆水平会撞车，需按宽度单独收窄。
- * 390px 宽实测：摇杆右缘 120px、簇左缘 175px → 留出 55px 拇指空隙
- * （修复前摇杆与切枪/雷按钮完全重叠，同为 x∈[96,152]）。 */
+/* 竖屏（窄屏）：核心簇与摇杆会撞车，需按宽度单独收窄。
+ * 摇杆已改为动态（底座由 JS 用 translate 定位），故此处只调待机提示圈尺寸，
+ * 不能改 #joy-base 的 left/bottom —— 那会与 JS 的 translate 打架。 */
 @media (max-width: 560px) and (orientation: portrait) {
-  #joy-base {
+  #joy-zone:not(.active) #joy-base {
     left: max(16px, env(safe-area-inset-left));
     bottom: max(24px, calc(env(safe-area-inset-bottom) + 12px));
-    width: 104px; height: 104px;
+    width: 76px; height: 76px;
   }
   #joy-knob { width: 44px; height: 44px; }
   #btn-cluster {
@@ -283,7 +309,10 @@ body {
 /* 矮屏（横屏手机）：缩小触控区与 HUD，避免左右重叠 */
 @media (max-height: 500px) {
   #btn-cluster { transform: scale(0.8); transform-origin: bottom right; }
-  #joy-base { transform: scale(0.8); transform-origin: bottom left; }
+  /* 摇杆底座由 JS translate 定位，不能再挂 transform: scale()（会覆盖 JS 的位移）。
+   * 改用待机圈尺寸 + knob 尺寸来控制矮屏占位。 */
+  #joy-zone.active #joy-base { width: 104px; height: 104px; }
+  #joy-zone:not(.active) #joy-base { width: 68px; height: 68px; }
   #bottom-left { bottom: 156px; left: 14px; }
   #bottom-right { bottom: 232px; right: 14px; }
   #chat-wrap { bottom: 280px; }
