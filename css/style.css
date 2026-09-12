@@ -77,7 +77,20 @@ body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; col
 #chat-log::-webkit-scrollbar-track { background: transparent; }
 .chat-line { font-size: 13px; background: rgba(8,14,10,.55); padding: 2px 8px; border-radius: 4px; width: fit-content; max-width: 100%; }
 .chat-line .name { color: #8fd6ff; } .chat-line.system { color: #ffd35e; }
-#chat-input { pointer-events: auto; width: 100%; margin-top: 6px; background: rgba(8,14,10,.8); border: 1px solid rgba(255,255,255,.25); color: #fff; padding: 7px 10px; border-radius: 6px; font-size: 14px; outline: none; }
+#chat-input { pointer-events: auto; flex: 1 1 auto; min-width: 0; background: rgba(8,14,10,.8); border: 1px solid rgba(255,255,255,.25); color: #fff; padding: 7px 10px; border-radius: 6px; font-size: 14px; outline: none; }
+/* 输入行：输入框 + 触屏发送/关闭按钮。
+ * 按钮默认 .hidden（PC 用 Enter/Esc），仅触屏 openChat 时显示 —— 见 js/hud.js。 */
+#chat-input-row { display: flex; align-items: stretch; gap: 6px; margin-top: 6px; }
+/* #hud 是 pointer-events:none，按钮必须显式开启 auto，否则点击穿透到 canvas，
+ * 触屏上"发送/关闭"会完全点不中（实测 elementFromPoint 命中 game 而非按钮）。 */
+#chat-input-row .btn { flex: 0 0 auto; padding: 0 14px; min-width: 56px; font-size: 14px; pointer-events: auto; }
+/* 触屏下按钮需 ≥44px 高才易点中 */
+@media (hover: none) and (pointer: coarse) {
+  #chat-input-row .btn { min-height: 44px; }
+}
+/* 关闭按钮用暖色边框：与"发送"区分，明确这是退出入口 */
+#chat-close-btn { background: rgba(120,50,50,.7); border-color: rgba(255,140,130,.7); }
+#chat-send-btn { background: rgba(50,110,70,.75); border-color: rgba(130,230,170,.7); }
 #mods-hud { position: absolute; right: 14px; top: 150px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 #dead-msg { position: absolute; left: 50%; top: 36%; transform: translateX(-50%); font-size: 26px; font-weight: 800; color: #ff6b5e; text-shadow: 0 2px 8px #000; }
 #hint { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); font-size: 11px; color: rgba(220,240,228,.55); text-align: center; white-space: nowrap; }
@@ -254,8 +267,19 @@ body {
 /* 暂停时禁用触控层：让暂停面板/退出按钮可点击（look-zone 默认盖住整屏） */
 #touch-ui.touch-disabled .zone { pointer-events: none; }
 
-/* 移动端聊天输入框移到屏幕顶部，避免被虚拟键盘遮挡 */
-#chat-wrap.mobile-open { top: max(10px, env(safe-area-inset-top)); bottom: auto; left: 50%; transform: translateX(-50%); width: 92vw; max-width: 92vw; }
+/* 移动端聊天输入框移到屏幕顶部，避免被弹出的虚拟键盘遮挡。
+ * 注意：这是"输入中"才有的状态，由 openChat 加类、closeChat 移除类。
+ * 触屏必须有显式关闭按钮（见 #chat-input-row），否则该类会永久挂着 —— 
+ * 曾经的表现就是聊天栏钉在屏幕顶部关不掉。 */
+#chat-wrap.mobile-open {
+  top: max(10px, env(safe-area-inset-top)); bottom: auto; left: 50%;
+  transform: translateX(-50%); width: 92vw; max-width: 92vw;
+  /* 注意：子元素的 z-index 无法越过 #hud(z-index:10) 建立的层叠上下文，
+   * 写 15 也压不住 #touch-ui(12)。输入态下改为禁用触控层来让路 ——
+   * 由 js/hud.js 给 #touch-ui 加 .touch-disabled（该规则已存在）。 */
+}
+/* 移动端输入态下压缩历史区，给键盘留出空间 */
+#chat-wrap.mobile-open #chat-log { max-height: 26vh; }
 
 /* 触屏为主设备：HUD 血量/弹药抬到触控区上方，避免被手指遮挡 */
 @media (hover: none) and (pointer: coarse) {

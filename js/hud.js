@@ -4,6 +4,15 @@ import { PRICES } from '../shared/economy.js';
 import { weaponDef, weaponName } from './weapon-registry.js';
 
 const $ = (id) => document.getElementById(id);
+// 触屏为主的设备判定（无悬停）。与 js/input.js 的 Input#isTouchPrimary 同标准：
+// 触屏笔记本/混合设备有 hover，保留鼠标交互，不显示触屏专属按钮。
+const isTouchPrimary = () => {
+  if (('ontouchstart' in window) || navigator.maxTouchPoints > 0) {
+    if (window.matchMedia && window.matchMedia('(hover: hover)').matches) return false;
+    return true;
+  }
+  return false;
+};
 const WEAPON_SHORT = {
   fang: '刀', k9: '手枪', vx9: '冲', arc17: '步', warden: '霰',
   longshot: '狙', bruiser: '机', thunder: '雷', zclaw: '爪',
@@ -44,6 +53,8 @@ export class Hud {
       scoreTable: $('score-table').querySelector('tbody'),
       chatLog: $('chat-log'),
       chatInput: $('chat-input'),
+      chatSendBtn: $('chat-send-btn'),
+      chatCloseBtn: $('chat-close-btn'),
       deadMsg: $('dead-msg'),
       statusDot: $('status-dot'),
       paused: $('paused'),
@@ -290,9 +301,24 @@ export class Hud {
     // 移动端把输入框移到屏幕顶部，避免被弹出的虚拟键盘遮挡
     const wrap = this.r.chatInput.closest('#chat-wrap');
     if (wrap) {
-      const touch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+      const touch = isTouchPrimary();
       wrap.classList.toggle('mobile-open', touch);
+      // 触屏没有 Esc/Enter 键，虚拟键盘的"前往"在无 form 时也不保证触发 keydown。
+      // 不显示这两个按钮，玩家就永远关不掉聊天栏（实测 mobile-open 会一直挂着）。
+      this.r.chatSendBtn.classList.toggle('hidden', !touch);
+      this.r.chatCloseBtn.classList.toggle('hidden', !touch);
+      // 触控层(z-index:12)盖在 HUD(10) 之上，其 #look-zone 铺满全屏会吃掉点击。
+      // 子元素的 z-index 越不过 #hud 的层叠上下文，只能让触控层暂时让路。
+      if (touch) document.getElementById('touch-ui')?.classList.add('touch-disabled');
     }
+  }
+
+  // 发送并关闭：Enter 键与"发送"按钮共用，避免两处逻辑漂移
+  submitChat() {
+    const text = this.r.chatInput.value.trim();
+    const cb = this.chatCb;
+    this.closeChat();
+    if (text && cb) cb(text);
   }
 
   closeChat() {
@@ -300,23 +326,60 @@ export class Hud {
     this.chatOpen = false;
     this.r.chatInput.classList.add('hidden');
     this.r.chatInput.value = '';
+    this.r.chatInput.blur();
     const wrap = this.r.chatInput.closest('#chat-wrap');
     if (wrap) wrap.classList.remove('mobile-open');
-    if (this.chatOnClose) this.chatOnClose();
+    this.r.chatSendBtn.classList.add('hidden');
+    this.r.chatCloseBtn.classList.add('hidden');
+    // 恢复触控层。暂停/购买菜单也会禁用触控（见 main.js setPaused），
+    // 若此时仍显示暂停面板则不解除，交给 setPaused 统一同步。
+    const touchUI = document.getElementById('touch-ui');
+    const pausedShown = this.r.paused && !this.r.paused.classList.contains('hidden');
+    if (touchUI && !pausedShown) touchUI.classList.remove('touch-disabled');
+    const onClose = this.chatOnClose;
     this.chatOnClose = null;
+    if (onClose) onClose();
   }
 
   bindChat() {
     this.r.chatInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
-        const text = this.r.chatInput.value.trim();
-        this.closeChat();
-        if (text && this.chatCb) this.chatCb(text);
+        this.submitChat();
       } else if (e.key === 'Escape') {
         this.closeChat();
       }
       e.stopPropagation();
     });
+    // 触屏：输入框失焦（点别处或虚拟键盘收起）且内容为空时自动关闭。
+    // 避免"键盘已收起但聊天栏还钉在顶部"的悬挂状态。
+    this.r.chatInput.addEventListener('blur', () => {
+      if (this.chatOpen && !this.r.chatInput.value.trim()) this.closeChat();
+    });
+    this.bindChatButtons();
+  }
+
+  // 触屏发送/关闭按钮。
+  // 用 touchstart 而非 click：虚拟键盘弹出时输入框持有焦点，
+  // 某些移动浏览器上 click 需要先失焦（两段式），touchstart 更可靠。
+  // 同时保留 click 兜底，用标志位防同一次操作双触发。
+  bindChatButtons() {
+    const bind = (el, fn) => {
+      let handled = false;
+      el.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handled = true;
+        fn();
+        setTimeout(() => { handled = false; }, 400);
+      }, { passive: false });
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (handled) return;
+        fn();
+      });
+    };
+    bind(this.r.chatSendBtn, () => { if (this.chatOpen) this.submitChat(); });
+    bind(this.r.chatCloseBtn, () => { if (this.chatOpen) this.closeChat(); });
   }
 
   showScoreboard(show, players, selfId) {

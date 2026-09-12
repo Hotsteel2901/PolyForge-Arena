@@ -61,7 +61,13 @@
       </div>
       <div id="chat-wrap">
         <div id="chat-log"></div>
-        <input id="chat-input" maxlength="120" placeholder="回车聊天…" class="hidden">
+        <div id="chat-input-row">
+          <input id="chat-input" maxlength="120" placeholder="回车聊天…" class="hidden">
+          <!-- 触屏没有 Esc/Enter，虚拟键盘的"前往"键在无 form 时也不保证产生 keydown，
+               故必须提供显式按钮作为唯一可靠的退出/发送入口（见 js/hud.js bindChatButtons）。 -->
+          <button id="chat-send-btn" class="btn hidden" type="button">发送</button>
+          <button id="chat-close-btn" class="btn hidden" type="button">关闭</button>
+        </div>
       </div>
       <div id="mods-hud"></div>
       <div id="dead-msg" class="hidden">你已阵亡 · 等待下一回合</div>

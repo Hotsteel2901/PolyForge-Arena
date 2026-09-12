@@ -1,13 +1,14 @@
 # PolyForge Arena 修复与优化报告
 
 对 `Hotsteel2901/PolyForge-Arena` 做了完整代码审计（41 个文件、约 9200 行），
-修复了 **28 处缺陷**，其中 6 处为影响核心玩法或移动端可用性的严重问题。
+修复了 **30 处缺陷**，其中 7 处为影响核心玩法或移动端可用性的严重问题。
 所有改动均经无头模拟与真实浏览器回归验证。
 
 - 第二批（[第六节](#六第二批修复手感与表现层)）：近战枪口焰、近战模型与挥砍动作、
   完整换弹动画、行走抖动
 - 第三批（[第八节](#八第三批修复移动端-ui-与操作体验)）：移动端 UI 与操作体验
 - 第四批（[第十节](#十第四批修复切枪失效--动态摇杆)）：切枪失效修复、动态摇杆
+- 第五批（[第十二节](#十二五第五批修复移动端聊天无法关闭)）：移动端聊天无法关闭
 
 ---
 
@@ -595,7 +596,120 @@ joyBase.style.transform =
 
 ---
 
-## 十二、已知限制
+---
+
+## 十二、第五批修复（移动端聊天无法关闭）
+
+### 29. 移动端聊天栏打开后无法关闭 ★移动端功能缺失
+
+**症状**：手机上点顶部操作条的「聊天」后，输入框一直挂在屏幕顶部，没有任何办法收起。
+
+**根因**：`js/hud.js` 的 `bindChat()` 只监听了 `#chat-input` 的 `keydown`：
+
+```js
+this.r.chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { ... this.closeChat(); ... }
+  else if (e.key === 'Escape') { this.closeChat(); }
+  e.stopPropagation();
+});
+```
+
+这是**唯一的**退出路径，而：
+
+- 手机没有 Esc 键
+- 输入框是 `type="text"` 且**不在 `<form>` 内**，虚拟键盘的「前往/发送」键
+  不保证产生 `keydown`
+
+于是 `closeChat()` 永远不被调用，`#chat-wrap.mobile-open` 一直挂着 ——
+而该样式正是把聊天区拉到屏幕顶部的那条规则，表现就是「栏一直显示在那，关不掉」。
+
+真实浏览器复现（`chat-repro.mjs`，移动视口）：
+
+```
+buttonsInWrap     : 0        ← 输入框周围没有任何关闭/发送按钮
+inputForm         : false    ← 无 form，虚拟键盘"前往"键无效
+afterBlur.chatOpen: true     ← 触摸别处失焦也不会关闭
+```
+
+即移动端**完全没有可用退出入口**。
+
+**修复**：
+
+1. `index.html` — 新增 `#chat-input-row`，内含 `#chat-send-btn`（发送）
+   与 `#chat-close-btn`（关闭），默认 `.hidden`，仅触屏打开聊天时显示
+2. `js/hud.js`
+   - 抽出 `submitChat()`，由 Enter 键与「发送」按钮共用，避免逻辑漂移
+   - `openChat()` 按 `isTouchPrimary()` 决定是否显示两个按钮
+   - `closeChat()` 收起按钮 + 移除 `mobile-open` + `blur()`（让虚拟键盘收起）
+   - 按钮绑定 `touchstart` 而非 `click`：虚拟键盘弹出时输入框持有焦点，
+     部分移动浏览器上 `click` 需先失焦（两段式），`touchstart` 更可靠；
+     保留 `click` 兜底并用标志位防双触发
+   - 输入框**失焦且内容为空**时自动关闭 —— 避免「键盘收了但栏还挂着」
+     （有内容时保留，防止误丢草稿）
+3. `css/style.css` — `#chat-input-row` flex 布局；按钮 `min-height: 44px`
+   适配触控；发送/关闭用不同配色的边框明确区分
+
+### 30. 修按钮时发现的两个连带缺陷
+
+**(a) 按钮点不中 —— `#hud` 的 `pointer-events: none` 被继承**
+
+`#hud { pointer-events: none }` 用于让 HUD 不吃游戏点击，新加的按钮继承了
+这份 `none`，实测 `elementFromPoint` 直接穿透到 `game` canvas ——
+**按钮在真机上完全点不动**。已给 `#chat-input-row .btn` 显式补
+`pointer-events: auto`。
+
+**(b) `z-index` 越不过父级层叠上下文**
+
+初版给 `#chat-wrap.mobile-open` 写了 `z-index: 15` 想压住触控层（12），
+但 `#chat-wrap` 在 `#hud`（`z-index: 10`）内部，**子元素的 z-index 无法
+越过父级建立的层叠上下文**，15 实际仍被夹在 10 里。
+
+改为：输入态下给 `#touch-ui` 加 `.touch-disabled`（该规则已存在，
+原本用于暂停面板），让铺满全屏的 `#look-zone` 暂时让路；关闭时解除，
+且若此时暂停面板仍显示则不解除，交给 `setPaused` 统一同步。
+
+---
+
+## 十三、第五批验证方式
+
+| 层 | 脚本 | 内容 | 结果 |
+|---|---|---|---|
+| 真实浏览器 | `chat-mobile.mjs` | 移动视口 + 桌面视口，覆盖按钮显隐、关闭、发送、空输入、失焦自动关闭、遮挡与恢复 | **35/35** |
+
+`chat-mobile.mjs` 覆盖的关键断言：
+
+- 打开后发送/关闭按钮**可见**（触屏唯一出口）
+- 点「关闭」→ `chatOpen=false`、输入框隐藏、**`mobile-open` 移除**、
+  按钮收起、输入框失焦、`onClose` 回调触发（恢复指针锁定）
+- 点「发送」→ 回调收到文本且同样关闭
+- 仅空白内容点「关闭」**不触发**发送
+- 空输入失焦 → 自动关闭；有内容失焦 → **保留**不丢草稿
+- 两个按钮中心 `elementFromPoint` 命中自身（**本次修的穿透缺陷**）
+- 输入时 `#touch-ui` 让路；关闭后射击键**重新可命中**
+- 桌面端：按钮不显示、`mobile-open` 不用、Enter/Esc 行为不变
+
+**回归**（确认前五批未相互破坏）：
+
+| 套件 | 结果 |
+|---|---|
+| `tap-edge.mjs` | 16/16 |
+| `switch-flow.mjs` | 27/27 |
+| `joy-dynamic.mjs` | 48/48 |
+| `mobile-fix-verify.mjs` | 25/25 |
+| `mobile-geom.mjs` | 21/21 |
+| `mobile-input.mjs` | 25/25 |
+| `mobile-browser.mjs` | 48/48 |
+| `sim.mjs` 服务端（`sc === score`） | 通过 |
+| `desktop-check.mjs` 桌面端 | 不创建触控 UI |
+| 全仓库语法 | 41 个 JS 文件通过 |
+
+> 测试期间修正了 1 个测试自身缺陷（未模拟进入对局导致 `#hud` 为 hidden、
+> 输入框 `display:none` 被浏览器拒绝 focus），并发现 2 个实现缺陷
+> （按钮 `pointer-events` 穿透、`z-index` 层叠上下文误用）。
+
+---
+
+## 十四、已知限制
 
 - 视觉效果（挥砍弧线、换弹动画、模型造型、按钮观感）为逐帧数值、CSS 几何与
   无头浏览器验证，**未经真人真机试玩确认** —— 建议实机开一局验收手感
