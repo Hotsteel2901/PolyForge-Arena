@@ -8,6 +8,8 @@ export class Effects {
     this.camera = camera;
     this.items = [];
     this.maxItems = 420;
+    this.muzzleTimer = null;
+    this._flashTex = null;
     this.muzzleLight = new THREE.PointLight(0xffb45e, 0, 9, 2);
     this.scene.add(this.muzzleLight);
   }
@@ -67,24 +69,33 @@ export class Effects {
     this._add(sprite, 0.06, { fade: true, userData: { opacity: 0.9 } });
     this.muzzleLight.position.copy(sprite.position);
     this.muzzleLight.intensity = 14;
-    setTimeout(() => {
+    clearTimeout(this.muzzleTimer);
+    this.muzzleTimer = setTimeout(() => {
       if (this.muzzleLight.intensity > 1) this.muzzleLight.intensity = 0;
     }, 40);
   }
 
+  // 枪口焰贴图缓存：避免每次开火都新建 canvas + CanvasTexture
+  _flashTexture() {
+    if (!this._flashTex) {
+      const c = document.createElement('canvas');
+      c.width = 64;
+      c.height = 64;
+      const ctx = c.getContext('2d');
+      const g = ctx.createRadialGradient(32, 32, 1, 32, 32, 32);
+      g.addColorStop(0, 'rgba(255,255,220,1)');
+      g.addColorStop(0.35, 'rgba(255,190,80,0.8)');
+      g.addColorStop(1, 'rgba(255,120,30,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 64, 64);
+      this._flashTex = new THREE.CanvasTexture(c);
+    }
+    return this._flashTex;
+  }
+
   _flashSprite() {
-    const c = document.createElement('canvas');
-    c.width = 64;
-    c.height = 64;
-    const ctx = c.getContext('2d');
-    const g = ctx.createRadialGradient(32, 32, 1, 32, 32, 32);
-    g.addColorStop(0, 'rgba(255,255,220,1)');
-    g.addColorStop(0.35, 'rgba(255,190,80,0.8)');
-    g.addColorStop(1, 'rgba(255,120,30,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, 64, 64);
     return new THREE.Sprite(new THREE.SpriteMaterial({
-      map: new THREE.CanvasTexture(c),
+      map: this._flashTexture(),
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       transparent: true,
@@ -104,6 +115,51 @@ export class Effects {
       depthWrite: false,
     }));
     this._add(line, 0.07, { fade: true, userData: { opacity: 0.85 } });
+  }
+
+  // 近战挥砍轨迹：一段短促的弧形划痕（匕首偏白、尸爪偏绿），取代直线弹道。
+  slash(from, to, isClaw = false) {
+    const color = isClaw ? 0x9fe07a : 0xd8e8ff;
+    // 以命中点为圆心，在视线方向上生成一段圆弧
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    const fx = dx / len, fy = dy / len, fz = dz / len;
+    // 构造与视线垂直的两个基向量
+    const upx = 0, upy = 1, upz = 0;
+    let rx = fy * upz - fz * upy;
+    let ry = fz * upx - fx * upz;
+    let rz = fx * upy - fy * upx;
+    const rl = Math.hypot(rx, ry, rz) || 1;
+    rx /= rl; ry /= rl; rz /= rl;
+    const ux = ry * fz - rz * fy;
+    const uy = rz * fx - rx * fz;
+    const uz = rx * fy - ry * fx;
+    const radius = isClaw ? 0.85 : 0.7;
+    const span = isClaw ? 1.5 : 1.15;
+    const segs = 10;
+    const pts = [];
+    // 弧线中心略微在视线前方，形成从右上到左下的劈砍感
+    const cx = from.x + fx * radius * 1.35;
+    const cy = from.y + fy * radius * 1.35;
+    const cz = from.z + fz * radius * 1.35;
+    for (let i = 0; i <= segs; i++) {
+      const a = -span / 2 + (span * i) / segs;
+      const sx = Math.cos(a) * rx + Math.sin(a) * ux;
+      const sy = Math.cos(a) * ry + Math.sin(a) * uy;
+      const sz = Math.cos(a) * rz + Math.sin(a) * uz;
+      pts.push(new THREE.Vector3(cx + sx * radius, cy + sy * radius, cz + sz * radius));
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.9,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }));
+    this._add(line, isClaw ? 0.12 : 0.1, { fade: true, userData: { opacity: 0.9 } });
   }
 
   impact(pos, kind = 'spark') {
