@@ -7,8 +7,10 @@
 import { Room } from '../host/room.js';
 import { CONFIG } from './config.js';
 import { weaponPrice } from '../shared/economy.js';
+import { MODES, modeCfg } from '../shared/modes.js';
 
-const MODE_LABEL = { defusal: '拆弹模式', zombie: '生化模式' };
+const MODE_LABEL = Object.fromEntries(Object.values(MODES).map((m) => [m.id, m.label]));
+const DEFAULT_MAP = { defusal: 'vertex', zombie: 'containment', tdm: 'pit', gungame: 'pit' };
 
 export class Host {
   constructor(net) {
@@ -19,12 +21,12 @@ export class Host {
   }
 
   async init({ name, mode, team, bots, botSkill }) {
-    const m = mode === 'zombie' ? 'zombie' : 'defusal';
+    const m = MODES[mode] ? mode : 'defusal';
     const botCount = Number.isFinite(+bots) ? Math.max(0, Math.min(10, +bots)) : CONFIG.bots;
     const room = new Room({
       id: this.net.offline ? 'offline' : 'p2p',
       mode: m,
-      mapId: m === 'defusal' ? 'vertex' : 'containment',
+      mapId: DEFAULT_MAP[m] || 'vertex',
       maxPlayers: CONFIG.maxPlayers,
       botCount,
       botSkill: Number.isFinite(+botSkill) ? +botSkill : CONFIG.botSkill,
@@ -91,9 +93,11 @@ export class Host {
       case 'chat': {
         const p = this.playerFor(fromId);
         if (!p) return;
-        const text = String(msg.text || '').slice(0, 120);
-        if (!text.trim()) return;
-        this.room.broadcast({ type: 'chat', name: p.name, text: text.slice(0, 120) });
+        const text = String(msg.text || '').slice(0, 120).trim();
+        if (!text) return;
+        // Mod 注册的 !命令 优先消化，未命中才当普通聊天广播
+        if (this.room.tryCommand(p, text)) return;
+        this.room.broadcast({ type: 'chat', name: p.name, text });
         break;
       }
       case 'ping':
@@ -119,11 +123,11 @@ export class Host {
       const pid = this.peerToPlayer.get(fromId);
       const p = this.room?.players.get(pid);
       if (p && this.room.connections.has(pid)) {
-        this.sendWelcome(p, fromId, msg.mode === 'zombie' ? 'zombie' : 'defusal');
+        this.sendWelcome(p, fromId, MODES[msg.mode] ? msg.mode : 'defusal');
       }
       return;
     }
-    const mode = msg.mode === 'zombie' ? 'zombie' : 'defusal';
+    const mode = MODES[msg.mode] ? msg.mode : 'defusal';
     const teamPref = msg.team === 'ct' || msg.team === 't' ? msg.team : 'random';
     const name = String(msg.name || '战士').slice(0, 16).trim() || '战士';
     const room = this.room;
@@ -147,13 +151,19 @@ export class Host {
 
   // 下发 welcome + 选枪目录（含 Mod 注册的主武器 + 生化模式可买的护甲/手雷）
   sendWelcome(p, fromId, mode) {
+    const cfg = modeCfg(mode);
     this.room.sendTo(p.id, {
       type: 'welcome',
       id: p.id,
       mode,
       map: this.room.mapId,
       mapName: this.room.map.name,
-      modeLabel: MODE_LABEL[mode],
+      modeLabel: MODE_LABEL[mode] || mode,
+      modeIntro: cfg.intro,
+      scoreLimit: cfg.scoreLimit || 0,
+      ladder: cfg.ladder || null,
+      // 规则表下发给客户端：本地预测必须与房主用同一套重力/伤害参数
+      rules: { ...this.room.rules },
       tickRate: 30,
       mods: (this.room.modResults.loaded || []).map((m) => m.id),
     });

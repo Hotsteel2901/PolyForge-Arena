@@ -25,6 +25,7 @@ export class Renderer {
     this.sun = null;
     this.hemi = null;
     this.lights = [];
+    this.vmLight = null;
     addEventListener('resize', () => this.resize());
   }
 
@@ -51,14 +52,38 @@ export class Renderer {
     this.scene.add(sky);
     this.scene.fog = new THREE.Fog(fog, skyNear, skyFar);
     this.scene.background = new THREE.Color(fog);
-    this.addEnvironment(c, fog);
+    this.addEnvironment(c);
   }
 
   // 环境反射：枪械/护甲用的是高 metalness 材质，没有 environment 会渲染成"死黑块"。
   // 用同一张天空渐变生成 PMREM 环境贴图，金属才有高光层次（成本一次性，之后零开销）。
-  addEnvironment(canvas, fogColor) {
+  addEnvironment(skyCanvas) {
     try {
-      const eq = new THREE.CanvasTexture(canvas);
+      // 必须用 2:1 的等距柱状投影画布：天空球用的是 16×512 的竖向条带，
+      // 直接当 equirect 喂给 PMREM 会因为宽高比极端、mip 塌缩，最终环境贴图近乎全黑，
+      // 金属枪械自然就渲染成一块死黑的剪影。
+      const w = 128;
+      const h = 64;
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d');
+      // 上半球：天空（取天空球贴图顶部的颜色），下半球：地面反射
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, '#cfe4ff');
+      grad.addColorStop(0.48, '#e8f2ff');
+      grad.addColorStop(0.52, '#7d8a7a');
+      grad.addColorStop(1, '#3d4a3c');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+      // 一点方位变化，避免环境只有上下渐变、金属没有任何方向感
+      const sun = ctx.createRadialGradient(w * 0.72, h * 0.18, 2, w * 0.72, h * 0.18, h * 0.55);
+      sun.addColorStop(0, 'rgba(255,245,215,0.95)');
+      sun.addColorStop(1, 'rgba(255,245,215,0)');
+      ctx.fillStyle = sun;
+      ctx.fillRect(0, 0, w, h);
+
+      const eq = new THREE.CanvasTexture(c);
       eq.mapping = THREE.EquirectangularReflectionMapping;
       eq.colorSpace = THREE.SRGBColorSpace;
       const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -115,6 +140,18 @@ export class Renderer {
       if (this.sun.shadow.map) this.sun.shadow.map.dispose();
       this.sun.shadow.map = null;
     }
+  }
+
+  // 第一人称专用补光：挂在相机上，只照近距离（distance 2m）。
+  // 场景光对 0.5m 处的枪身几乎是个"掠射角"，金属材质会整块发黑；
+  // 贴脸补一盏暖光后，枪身结构、手部、弹匣高光才看得出来。
+  setupViewmodelLight() {
+    if (this.vmLight) return this.vmLight;
+    const light = new THREE.PointLight(0xfff0dc, 1.6, 2.0, 1.6);
+    light.position.set(0.28, 0.18, 0.15);
+    this.camera.add(light);
+    this.vmLight = light;
+    return light;
   }
 
   addLight(light) {

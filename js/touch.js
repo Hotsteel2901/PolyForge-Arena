@@ -58,6 +58,7 @@ export function setupTouch(input, onLook, opts = {}) {
       <div class="zone touch-btn" id="fire-btn"><span class="btn-label">射击</span></div>
       <div class="zone touch-btn" id="use-btn"><span class="btn-label">互动</span></div>
       <div class="zone touch-btn" id="switch-btn"><span class="btn-label">切枪</span></div>
+      <div class="zone touch-btn" id="grenade-btn"><span class="btn-label">雷</span></div>
       <div class="zone touch-btn" id="jump-btn"><span class="btn-label">跳</span></div>
       <div class="zone touch-btn" id="ads-btn"><span class="btn-label">镜</span></div>
       <div class="zone touch-btn" id="crouch-btn"><span class="btn-label">蹲</span></div>
@@ -85,6 +86,7 @@ export function setupTouch(input, onLook, opts = {}) {
   const useBtn = $btn('use-btn');
   const reloadBtn = $btn('reload-btn');
   const switchBtn = $btn('switch-btn');
+  const grenadeBtn = $btn('grenade-btn');
   const crouchBtn = $btn('crouch-btn');
   const shopBtn = $btn('shop-btn');
   const scoreBtn = $btn('score-btn');
@@ -303,6 +305,7 @@ export function setupTouch(input, onLook, opts = {}) {
     input.swdQueued = 1;
     if (opts.onSwitchRequest) opts.onSwitchRequest(null, 1);
   }, 'switch');
+  tap(grenadeBtn, () => { if (opts.onGrenade) opts.onGrenade(); }, 'grenade');
   tap(shopBtn, () => { if (opts.onShop) opts.onShop(); }, 'shop');
   tap(scoreBtn, () => { input.scoreboard = !input.scoreboard; }, 'score');
   tap(chatBtn, () => { if (opts.onChat) opts.onChat(); }, 'chat');
@@ -362,6 +365,11 @@ export function setupTouch(input, onLook, opts = {}) {
   ui.setSwitchEnabled = (on) => {
     switchBtn.classList.toggle('disabled', !on);
     switchBtn.style.pointerEvents = on ? '' : 'none';
+  };
+  // 丧尸没有手雷：置灰避免反复点空
+  ui.setGrenadeEnabled = (on) => {
+    grenadeBtn.classList.toggle('disabled', !on);
+    grenadeBtn.style.pointerEvents = on ? '' : 'none';
   };
   return ui;
 }

@@ -30,6 +30,11 @@ export class Input {
     this.mouseDX = 0;
     this.mouseDY = 0;
     this.mvTouch = null;
+    // 操作模式：ADS / 疾跑支持"按住"或"切换"两种手感
+    this.adsMode = 'hold';
+    this.sprintMode = 'hold';
+    this.sprintToggle = false;
+    this.onQuickSwap = null;
     this.mvMag = 0;          // 触控摇杆推程（0..1），用于自动疾跑
     this.sprintTouch = false; // 触控端疾跑（摇杆推满朝前触发）
     this.bound = {
@@ -93,6 +98,14 @@ export class Input {
     if (e.code === 'KeyR') this.reloadQueued = true;
     if (e.code === 'KeyF') this.skillQueued = true; // 丧尸加速技能
     if (e.code === 'KeyE') this.useQueued = true;
+    // Q：快速切回上一把武器
+    if (e.code === 'KeyQ') {
+      if (this.onQuickSwap) this.onQuickSwap();
+    }
+    // 疾跑切换模式：Shift 按下即翻转状态
+    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && this.sprintMode === 'toggle' && !e.repeat) {
+      this.sprintToggle = !this.sprintToggle;
+    }
     if (e.code === 'Space') this.jumpQueued = true;
     if (e.code.startsWith('Digit')) {
       const n = Number(e.code.slice(5));
@@ -122,12 +135,15 @@ export class Input {
     // 点购买菜单/暂停面板/设置时不应顺带开一枪（旧的 document 级监听会误触发）
     if (!this.locked && e.target !== this.canvas) return;
     if (e.button === 0) this.fire = true;
-    if (e.button === 2) this.ads = true;
+    if (e.button === 2) {
+      // 开镜：按住式（默认）或切换式（设置可选）
+      this.ads = this.adsMode === 'toggle' ? !this.ads : true;
+    }
   }
 
   mouseup(e) {
     if (e.button === 0) this.fire = false;
-    if (e.button === 2) this.ads = false;
+    if (e.button === 2 && this.adsMode !== 'toggle') this.ads = false;
   }
 
   wheel(e) {
@@ -150,7 +166,7 @@ export class Input {
       mv,
       j: this.jumpQueued ? 1 : 0,
       // 疾跑：键盘 Shift，或触控摇杆推满朝前（见 js/touch.js setJoy）
-      s: (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.sprintTouch) ? 1 : 0,
+      s: (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.sprintToggle || this.sprintTouch) ? 1 : 0,
       c: (this.keys.has('ControlLeft') || this.keys.has('KeyC') || this.crouchHeld) ? 1 : 0,
       yaw: this.yaw,
       pitch: this.pitch,

@@ -217,7 +217,9 @@ function findEnemy(room, bot) {
     if (p === bot || !p.alive) continue;
     const hostile = room.mode === 'zombie'
       ? p.isZombie !== bot.isZombie
-      : p.team !== bot.team;
+      : room.mode === 'gungame'
+        ? true // 自由混战：除自己外全员敌对
+        : p.team !== bot.team;
     if (!hostile) continue;
     const d = distance(bot.pos, p.pos);
     const count = targetCount.get(p.id) || 0;
@@ -249,6 +251,20 @@ function hasLOS(room, from, to) {
 }
 
 function chooseGoal(room, bot) {
+  // 死斗 / 军备竞赛：朝最近的活人推进（分散目标，避免全员挤在一个点）
+  if (room.mode === 'tdm' || room.mode === 'gungame') {
+    let best = null;
+    let bestD = Infinity;
+    for (const p of room.players.values()) {
+      if (p === bot || !p.alive) continue;
+      const d = distance(bot.pos, p.pos);
+      // 轻微扰动：让多个 Bot 不要完全走同一条线
+      const score = d + Math.random() * 6;
+      if (score < bestD) { bestD = score; best = p; }
+    }
+    if (best) return { x: best.pos.x, z: best.pos.z, y: best.pos.y ?? 0 };
+    return { x: 0, z: 0, y: 0 };
+  }
   if (room.mode === 'defusal') {
     if (bot.team === TEAM.T) {
       if (bot.bombCarrier) {

@@ -7,7 +7,6 @@ export function createModContext(room, meta) {
     id: meta.id,
     name: meta.name,
     version: meta.version,
-    mode: room.mode,
     config: room.config,
     state: {},
     log(...args) {
@@ -18,6 +17,27 @@ export function createModContext(room, meta) {
     },
     registerMap(def) {
       if (def?.id) room.maps.set(def.id, def);
+    },
+    // ---- 第五批新增：规则 / 命令 / 玩家表 ----
+    // 规则热更新会广播给所有客户端，本地预测与服务端共用同一套参数
+    setRule(key, value) {
+      room.setRule(key, value);
+    },
+    get rules() {
+      return room.rules;
+    },
+    // 聊天命令：玩家输入 !name args 时触发（不给所有人广播）
+    command(name, fn) {
+      room.registerCommand(name, fn);
+    },
+    players() {
+      return [...room.players.values()];
+    },
+    getPlayer(id) {
+      return room.players.get(id) || null;
+    },
+    get mode() {
+      return room.mode;
     },
     on(event, fn) {
       room.on(event, fn);
@@ -35,6 +55,10 @@ export function createModContext(room, meta) {
     say(text) {
       room.say(`[${meta.name}] ${text}`);
     },
+    // 只发给某个玩家（命令反馈用，不进公共聊天）
+    tell(playerId, text) {
+      room.sendTo(playerId, { type: 'chat', name: 'SYSTEM', text, system: true });
+    },
   };
 }
 
@@ -50,7 +74,11 @@ export async function loadServerMods(room, dir = '../mods') {
   } catch {
     return result;
   }
+  // enabled:false 的模组默认不加载（示例/实验性模组）；?mods=all 可强制全开
+  const forceAll = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('mods') === 'all';
   for (const meta of list.server || []) {
+    if (meta.enabled === false && !forceAll) continue;
     const id = meta.id;
     try {
       const mod = (await import(`${dir}/server/${id}/mod.js?v=${Date.now()}-${id}`)).default;

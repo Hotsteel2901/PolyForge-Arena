@@ -60,11 +60,29 @@ export function createPlayer(id, name, { isBot = false } = {}) {
   };
 }
 
-export function giveLoadout(p, mode, team) {
+// 取得武器定义：优先用房间武器表（含 Mod 注册的武器），退回内置表
+function weaponDefOf(weapons, id) {
+  if (!weapons) return BUILTIN_WEAPONS[id];
+  if (typeof weapons.get === 'function') return weapons.get(id) || BUILTIN_WEAPONS[id];
+  return weapons[id] || BUILTIN_WEAPONS[id];
+}
+
+export function giveLoadout(p, mode, team, weapons = null) {
   p.weapons.clear();
   p.activeSlot = 1;
   p.weaponMoveMult = 1;
   p.grenadeCount = 0;
+  if (mode === 'gungame') {
+    // 军备竞赛：装备完全由等级决定，随升级即时替换（见 Room.advanceGunGame）
+    const ladder = (room_gungameLadder(p) || []);
+    const id = ladder[Math.min(p.ggLevel || 0, Math.max(0, ladder.length - 1))];
+    const def = weaponDefOf(weapons, id);
+    if (def) {
+      p.weapons.set(def.slot, new WeaponRuntime(def));
+      p.activeSlot = def.slot;
+    }
+    return;
+  }
   if (p.isZombie) {
     // 4 爪击杀满血人类（100HP）：单爪伤害略低于人类满血，避免 2 爪秒杀过于惩罚
     const claw = { ...BUILTIN_WEAPONS.fang, id: 'zclaw', name: '尸爪', range: 2.3, damage: 34, fireRate: 68, moveMult: 1 };
@@ -79,12 +97,23 @@ export function giveLoadout(p, mode, team) {
     // 拆弹模式开局：只持手枪（无免费主武器），主武器通过购买获得
     p.grenadeCount = 1;
     p.activeSlot = 1; // 刚进房间 / 刚创建房间时手持手枪
+  } else if (mode === 'tdm') {
+    // 团队死斗：直接给满配，节奏优先，不设经济
+    p.weapons.set(2, new WeaponRuntime(BUILTIN_WEAPONS.arc17));
+    p.grenadeCount = 2;
+    p.activeSlot = 2;
   } else {
     // 生化模式：开局自带免费主武器（拆弹模式则无，需购买）
     p.weapons.set(2, new WeaponRuntime(BUILTIN_WEAPONS.arc17));
     p.grenadeCount = 3;
     p.activeSlot = 2;
   }
+}
+
+// 军备竞赛的武器阶梯由模式配置决定；player.js 不 import 模式表以避免循环依赖，
+// 由 Room 在创建玩家时把阶梯挂到玩家对象上（p.ggLadder）。
+function room_gungameLadder(p) {
+  return p.ggLadder && p.ggLadder.length ? p.ggLadder : ['k9', 'vx9', 'arc17', 'warden', 'bruiser', 'longshot', 'fang'];
 }
 
 export function spawnPlayer(room, p, team, spawn, opts = {}) {
@@ -103,8 +132,8 @@ export function spawnPlayer(room, p, team, spawn, opts = {}) {
     p.useProgress = 0;
     p.useTarget = null;
   } else {
-    p.armor = p.isZombie ? 0 : 50;
-    giveLoadout(p, room.mode, team);
+    p.armor = p.isZombie ? 0 : (room.mode === 'tdm' ? 100 : 50);
+    giveLoadout(p, room.mode, team, room.weapons);
   }
   p.lastHitAt = -99;
   p.respawnAt = 0;
@@ -116,7 +145,8 @@ export function spawnPlayer(room, p, team, spawn, opts = {}) {
   // 触发 mod 钩子（可能替换主武器，如 energy-rifle mod 默认替换），随后再应用玩家选枪的武器，
   // 保证生化模式买的枪在重生后不被 mod 覆盖
   room.emit('player_spawn', { player: p });
-  room.broadcast({ type: 'player_spawn', id: p.id, team: p.team, zombie: p.isZombie ? 1 : 0 });
+  // 带上出生朝向：客户端据此把视角转向战场（否则复活后仍朝着上一局的方向）
+  room.broadcast({ type: 'player_spawn', id: p.id, team: p.team, zombie: p.isZombie ? 1 : 0, yaw: p.yaw });
   // 生化模式：加入者初始 1000；人类重生后保持所选主武器（非僵尸）
   if (room.mode === 'zombie') {
     if (!p.zombieMoneyInit) {
@@ -139,11 +169,14 @@ export function spawnPlayer(room, p, team, spawn, opts = {}) {
 
 export function damagePlayer(room, shooter, victim, amount, info = {}) {
   if (!victim.alive) return null;
-  // 友伤拦截：同队伤害直接忽略（含手雷等范围伤害）
-  if (shooter && shooter !== victim && shooter.team === victim.team) return null;
+  // 友伤拦截：同队伤害直接忽略（含手雷等范围伤害）。
+  // 军备竞赛为自由混战，队伍只是用来分色，不能拦伤害；
+  // 规则表 friendlyFire=true 时（Mod 可开）同队也吃伤害。
+  if (shooter && shooter !== victim && shooter.team === victim.team
+      && room.mode !== 'gungame' && !room.rules?.friendlyFire) return null;
   if (victim.isZombie) victim.slowTicks = PHYS.ZOMBIE_SLOW_TICKS;
-  // 变身倍率（琉璃猎人 / 尸王 / 尸仆 的伤害加成）
-  const mult = shooter && shooter !== victim ? (shooter.damageMult ?? 1) : 1;
+  // 变身倍率（琉璃猎人 / 尸王 / 尸仆 的伤害加成）× 全局规则倍率
+  const mult = (shooter && shooter !== victim ? (shooter.damageMult ?? 1) : 1) * (room.rules?.damageMult ?? 1);
   const { damage, armor } = applyArmor(Math.round(amount * mult), victim.armor);
   victim.hp -= damage;
   victim.armor = armor;
@@ -204,6 +237,21 @@ export function killPlayer(room, killer, victim, info = {}) {
     } else {
       victim.respawnAt = room.time + 6;
     }
+    return;
+  }
+
+  // 团队死斗：计分 + 固定复活时间
+  if (room.mode === 'tdm') {
+    const key = killer && killer !== victim ? (killer.team === TEAM.CT ? 'CT' : 'T') : null;
+    victim.respawnAt = room.time + (room.modeCfg.respawnDelay ?? 3);
+    if (key) room.core?.addKill(key);
+    return;
+  }
+
+  // 军备竞赛：击杀者升级武器，最后一级（匕首）击杀直接夺冠
+  if (room.mode === 'gungame') {
+    victim.respawnAt = room.time + (room.modeCfg.respawnDelay ?? 2);
+    if (killer && killer !== victim) room.advanceGunGame(killer, victim);
     return;
   }
 

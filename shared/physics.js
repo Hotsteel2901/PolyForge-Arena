@@ -3,7 +3,9 @@
 import { PHYS } from './constants.js';
 import { resolveOverlap, aabbOverlap } from './math.js';
 
-export function movePlayer(p, input, dt, colliders) {
+// opts.gravity：重力倍率（Mod 规则，默认 1）。客户端预测与服务端必须传同一个值，
+// 否则低重力模组下会出现"客户端已经落地、服务端还在空中"的持续回拉。
+export function movePlayer(p, input, dt, colliders, opts = {}) {
   const speedBase = p.speedOverride ?? (p.isZombie ? PHYS.ZOMBIE_SPEED : PHYS.SPEED * (p.weaponMoveMult ?? 1));
   let speed = speedBase;
   if (p.isZombie && p.slowTicks > 0) speed *= PHYS.ZOMBIE_SLOW_MULT;
@@ -37,7 +39,7 @@ export function movePlayer(p, input, dt, colliders) {
       p.vel.y = 0;
     }
   } else {
-    p.vel.y += PHYS.GRAVITY * dt;
+    p.vel.y += PHYS.GRAVITY * dt * (opts.gravity ?? 1);
   }
   if (p.vel.y < PHYS.TERMINAL) p.vel.y = PHYS.TERMINAL;
 
