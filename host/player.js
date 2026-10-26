@@ -142,6 +142,8 @@ export function spawnPlayer(room, p, team, spawn, opts = {}) {
   p.speedOverride = undefined;
   p.boostUntil = 0;
   p.skillReadyAt = 0;
+  // 复活保护：死亡到重回战场的瞬间最容易被"守尸"，给 1.2s 无敌缓冲
+  p.spawnProtectUntil = opts.protect ? room.time + opts.protect : 0;
   // 触发 mod 钩子（可能替换主武器，如 energy-rifle mod 默认替换），随后再应用玩家选枪的武器，
   // 保证生化模式买的枪在重生后不被 mod 覆盖
   room.emit('player_spawn', { player: p });
@@ -169,6 +171,8 @@ export function spawnPlayer(room, p, team, spawn, opts = {}) {
 
 export function damagePlayer(room, shooter, victim, amount, info = {}) {
   if (!victim.alive) return null;
+  // 出生保护期内免疫伤害（子弹照样显示命中，但不掉血）
+  if (victim.spawnProtectUntil && room.time < victim.spawnProtectUntil) return null;
   // 友伤拦截：同队伤害直接忽略（含手雷等范围伤害）。
   // 军备竞赛为自由混战，队伍只是用来分色，不能拦伤害；
   // 规则表 friendlyFire=true 时（Mod 可开）同队也吃伤害。
@@ -266,7 +270,7 @@ export function killPlayer(room, killer, victim, info = {}) {
 
 export function respawnZombie(room, p) {
   const spawn = room.pickSpawn('ZOMBIE');
-  spawnPlayer(room, p, TEAM.ZOMBIE, spawn);
+  spawnPlayer(room, p, TEAM.ZOMBIE, spawn, { protect: 1.2 });
 }
 
 export function eyeHeight(p) {

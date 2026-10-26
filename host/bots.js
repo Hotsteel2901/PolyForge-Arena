@@ -215,6 +215,7 @@ function findEnemy(room, bot) {
   let bestOverD = Infinity;
   for (const p of room.players.values()) {
     if (p === bot || !p.alive) continue;
+    if (p.spawnProtectUntil && room.time < p.spawnProtectUntil) continue; // 无敌期不打
     const hostile = room.mode === 'zombie'
       ? p.isZombie !== bot.isZombie
       : room.mode === 'gungame'

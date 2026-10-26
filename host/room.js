@@ -435,7 +435,7 @@ export class Room {
   respawnContinuous(p) {
     const key = p.team === TEAM.CT ? 'CT' : 'T';
     const spot = this.pickSpawn(key);
-    spawnPlayer(this, p, p.team, spot);
+    spawnPlayer(this, p, p.team, spot, { protect: 1.2 });
   }
 
   // 实体炸弹放在 T 出生点前方（未激活），方便 T 方开局拾取
@@ -1275,6 +1275,8 @@ export class Room {
         bo: p.boostUntil && this.time < p.boostUntil ? 1 : 0,
         // 复活倒计时（秒）：-1 表示本回合不再复活（拆弹阵亡 / 决战阵亡）
         ra: p.alive ? 0 : (p.respawnAt ? Math.max(0, Math.ceil(p.respawnAt - this.time)) : -1),
+        // 出生保护（1=无敌中）：客户端可以据此提示/描边
+        sp: p.spawnProtectUntil && this.time < p.spawnProtectUntil ? 1 : 0,
         // 军备竞赛等级（0 起）；其他模式恒为 0
         lv: p.ggLevel || 0,
       });
