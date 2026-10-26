@@ -926,6 +926,7 @@ rounds 6~7 · kills 28~33 · bomb_planted 1~3 · err null
 | 开镜/疾跑模式 | 「按住」或「切换」二选一（默认按住，老手感不变） |
 | Q 快速切枪 | 切回上一把武器（记录在 `prevVmSlot`） |
 | 聊天历史 | 上下键回溯最近 12 条输入 |
+| 横屏 HUD 重叠 | 顶栏在 `(landscape) and (max-height:620px)` 改横排；击杀播报下移到 162px 并限制 3 条高度，不再压住顶栏与武器槽 |
 
 **布局几何断言**（844×390 横屏，脚本实测 8 个按钮 `getBoundingClientRect`）：
 `overlaps: []`，fire 76×112、switch 52×52@(190,60)。

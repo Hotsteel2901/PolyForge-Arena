@@ -323,6 +323,21 @@ body {
   #dead-msg { font-size: 20px; }
 }
 
+/* 横屏且不高的设备：顶部操作条必须横排，否则竖排 4 个按钮会压住右上角击杀播报 */
+@media (orientation: landscape) and (max-height: 620px) {
+  #touch-topbar {
+    flex-direction: row;
+    top: max(52px, calc(env(safe-area-inset-top) + 44px));
+    right: max(8px, env(safe-area-inset-right));
+    transform: scale(0.78); transform-origin: top right;
+  }
+  #touch-ui .top-btn { width: 46px; height: 46px; font-size: 10px; }
+  /* 击杀播报让开顶栏（54~88）与武器槽（124~158），落在两者下方 */
+  /* 横屏 390 高的可用竖向空间只有 158~233 这一段，播报最多放 3 条，超出裁掉最旧的 */
+  #hud #killfeed { top: 162px; width: 168px; max-height: 72px; overflow: hidden; }
+  #hud #killfeed .kf { font-size: 11px; padding: 1px 6px; }
+}
+
 /* 矮屏（横屏手机）：缩小触控区与 HUD，避免左右重叠 */
 @media (max-height: 500px) {
   #btn-cluster { transform: scale(calc(var(--btn-scale, 1) * 0.8)); transform-origin: bottom right; }
@@ -333,7 +348,7 @@ body {
   #bottom-left { bottom: 156px; left: 14px; }
   #bottom-right { bottom: 232px; right: 14px; }
   #chat-wrap { bottom: 280px; }
-  #killfeed { top: 62px; }
+  #hud #killfeed { top: 162px; width: 168px; max-height: 72px; overflow: hidden; }
   /* 矮屏下顶部操作条改横排。必须避开 #pause-btn（top:8 right:8, 40x40），
    * 否则暂停按钮会盖住整排低频键 —— 故整体下移到暂停按钮下方。 */
   #touch-topbar {
