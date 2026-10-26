@@ -40,7 +40,7 @@ input.onWheel = (dir) => localCycleWeapon(dir);
 
 // touchSens：触控视角专用倍率。与鼠标共用 sens 数值但量纲不同，
 // 默认 2.0 使 0.0022×1×2 ≈ 原有固定值 0.0045，升级后手感零回归。
-const defaultSettings = { sens: 1, touchSens: 2, fov: 75, vol: 0.8, music: true, shadow: true, quality: 'high' };
+const defaultSettings = { sens: 1, touchSens: 2, fov: 75, vol: 0.8, music: true, shadow: true, quality: 'high', fps: false, crosshair: '#dcffe6' };
 const settings = loadSettings();
 
 const state = {
@@ -87,7 +87,7 @@ const state = {
   viewmodels: {},
   localSwitchAt: 0,
   pendingSlot: null,
-  selfPrimaryId: 'arc17',
+  selfPrimaryId: null,   // 已知持有的主武器（由快照/切枪回执确认，null=当前没有主武器）
   lastSwitchSeq: 0,
   pendingLocal: null,
   zombieCatalog: [], // 生化模式选枪目录（含 Mod 主武器）
@@ -95,6 +95,9 @@ const state = {
   adsAmount: 0,       // 0=腰射，1=完全开镜（平滑过渡）
   activeAds: null,    // 开镜参数（关镜回退期间保持，用于补出关镜动画）
   scopeCanvas: null,
+  remoteShots: new Map(), // 他人开火的曳光弹节流：id -> 上次时间
+  lastHudRoundAt: 0,
+  fps: 0,
 };
 
 // ---------------- 设置 ----------------
@@ -121,6 +124,9 @@ function applySettings() {
   input.fov = settings.fov;
   sfx.setVolume(settings.vol);
   renderer.applySettings({ shadow: settings.shadow, quality: settings.quality });
+  hud.setCrosshairColor(settings.crosshair || '#dcffe6');
+  const fpsEl = $('fps');
+  if (fpsEl) fpsEl.classList.toggle('hidden', !settings.fps);
 }
 
 function bindSettingsUI() {
@@ -131,6 +137,8 @@ function bindSettingsUI() {
   $('set-music').value = settings.music ? '1' : '0';
   $('set-shadow').value = settings.shadow ? '1' : '0';
   $('set-quality').value = settings.quality;
+  $('set-fps').value = settings.fps ? '1' : '0';
+  $('set-crosshair').value = settings.crosshair || '#dcffe6';
   // 触控灵敏度只对触屏设备有意义，非触屏隐藏该行，避免设置面板出现无效项
   const touchRow = $('set-touch-sens')?.closest('label');
   if (touchRow && !input.isTouchPrimary()) touchRow.classList.add('hidden');
@@ -146,8 +154,12 @@ function bindSettingsUI() {
   };
   $('set-shadow').onchange = (e) => { settings.shadow = e.target.value === '1'; saveSettings(); applySettings(); };
   $('set-quality').onchange = (e) => { settings.quality = e.target.value; saveSettings(); applySettings(); };
+  $('set-fps').onchange = (e) => { settings.fps = e.target.value === '1'; saveSettings(); applySettings(); };
+  $('set-crosshair').oninput = (e) => { settings.crosshair = e.target.value; saveSettings(); applySettings(); };
   $('settings-close').onclick = () => {
     $('settings').classList.add('hidden');
+    // 从暂停菜单进来的，返回暂停面板而不是主菜单
+    if (state.inGame) { $('paused').classList.remove('hidden'); return; }
     $('menu').classList.remove('hidden');
   };
   $('settings-btn').onclick = () => {
@@ -230,6 +242,8 @@ async function connect() {
   const mode = $('mode-select').value;
   const team = $('team-select').value;
   const roomCode = $('room-input').value.trim();
+  const bots = Number($('bot-select')?.value ?? 8);
+  const botSkill = Number($('difficulty-select')?.value ?? 1);
   $('menu').classList.add('hidden');
   $('loading').classList.remove('hidden');
   $('loading-text').textContent = '初始化 VibeHub…';
@@ -252,6 +266,8 @@ async function connect() {
       team,
       roomId: roomCode || undefined,
       quick: !roomCode,
+      bots,
+      botSkill,
     });
     // 加入后等待 welcome（房主本地同步派发 / 远程经 P2P 到达），welcome 事件进入游戏
     window.__joinResult = res;
@@ -275,6 +291,8 @@ async function connectOffline() {
   const name = $('name-input').value.trim() || '战士';
   const mode = $('mode-select').value;
   const team = $('team-select').value;
+  const bots = Number($('bot-select')?.value ?? 8);
+  const botSkill = Number($('difficulty-select')?.value ?? 1);
   $('menu').classList.add('hidden');
   $('loading').classList.remove('hidden');
   $('loading-text').textContent = '启动离线房间…';
@@ -288,7 +306,7 @@ async function connectOffline() {
     net.room = null;
     net.host = new Host(net);
     // host.init 内部 start 本地 Room、加入玩家并本地回环 dispatch welcome → enterGame
-    await net.host.init({ name, mode, team });
+    await net.host.init({ name, mode, team, bots, botSkill });
     net.connected = true;
     window.__joinResult = { isHost: true, roomId: null, offline: true };
   } catch (err) {
@@ -321,9 +339,22 @@ function enterGame(welcome) {
   $('hud').classList.remove('hidden');
   state.inGame = true;
   state.paused = false;
+  // 输入层只在局内接管 Tab / 数字键 / 空格，避免在主菜单里按 Tab 切不了焦点
+  input.active = true;
+  input.yaw = 0;
+  input.pitch = 0;
+  state.selfPrimaryId = null;
+  state.remoteShots.clear();
+  hud.reset();
+  sfx.startAmbient(state.map.ambient || 'outdoor');
+  // 操作提示只在开局露一会儿：常驻会与右下角武器槽重叠，且老玩家不需要
+  const hint = document.getElementById('hint');
+  hint.classList.remove('faded');
+  clearTimeout(state.hintTimer);
+  state.hintTimer = setTimeout(() => hint.classList.add('faded'), 12000);
 
   renderer.setupSky(state.map.sky);
-  renderer.setupLights();
+  renderer.setupLights(state.map);
   applySettings();
   state.mapGroup = buildMapMesh(state.map);
   renderer.scene.add(state.mapGroup);
@@ -411,6 +442,9 @@ function setPaused(flag) {
   state.paused = flag;
   hud.setPaused(flag);
   if (state.touchUI) state.touchUI.classList.toggle('touch-disabled', flag);
+  // 离线模式：本机就是房主且没有别的真人，暂停时把权威模拟一起冻结，
+  // 否则"暂停"期间回合计时、复活倒计时、炸弹倒计时仍在走（联机模式不能冻结，那等于作弊）。
+  if (net.offline && net.host?.room) net.host.room.paused = flag;
 }
 
 // 打开暂停菜单：火狐按 Esc 只会释放鼠标（不触发 pointerlockchange 暂停），
@@ -450,6 +484,9 @@ function openMobileChat() {
 function backToMenu() {
   state.connected = false;
   state.inGame = false;
+  input.active = false;
+  sfx.stopAmbient();
+  hud.reset();
   net.leave();
   $('room-code').textContent = '';
   state.adsAmount = 0;
@@ -556,29 +593,95 @@ function wireEvents() {
     if (victim) {
       const p = victim.next;
       effects.impact({ x: p.x, y: p.y + 1, z: p.z }, 'blood');
+      // 倒地动画：先塌下去再隐藏，比"瞬间消失"清楚得多（尤其远距离击杀）
+      victim.death = { t: 0, dur: 0.62, baseY: victim.mesh.position.y || p.y };
+      victim.mesh.visible = true;
+      if (victim.tag) victim.tag.visible = false;
     }
     if (msg.victim === state.selfId) {
       hud.damageFlash();
+      hud.setDeathInfo(msg.killerName, msg.weapon, msg.headshot);
     }
     if (msg.victim === state.selfId && !msg.zombie) {
       sfx.roundEnd(false);
     }
-    if (msg.killer === state.selfId) sfx.kill();
+    if (msg.killer === state.selfId) {
+      sfx.kill();
+      hud.killConfirm(msg.headshot, msg.weapon);
+    }
     dispatchMods(state.mods, 'kill', msg);
   });
   net.on('damage', (msg) => {
     hud.damageFlash();
     sfx.damage();
+    // 受击方向指示：用攻击者当前位置算相对方位，玩家不用回头也知道该往哪防
+    if (msg.from && msg.from !== state.selfId) {
+      const rec = state.players.get(msg.from);
+      if (rec) {
+        const dx = rec.next.x - state.self.pos.x;
+        const dz = rec.next.z - state.self.pos.z;
+        const rel = Math.atan2(dx, dz) - state.self.yaw;
+        hud.damageDirection(rel);
+      }
+    } else if (msg.from === state.selfId) {
+      hud.damageDirection(0);
+    }
     dispatchMods(state.mods, 'damage', msg);
   });
   net.on('hit', (msg) => {
     hud.hitmarker(msg.headshot);
     sfx.hit(msg.headshot);
+    if (msg.headshot) sfx.ding();
+    hud.damageNumber(msg.dmg, msg.headshot);
     dispatchMods(state.mods, 'hit', msg);
+  });
+  // 他人开火：曳光弹 + 枪口焰 + 空间化枪声 + 近失弹呼啸
+  net.on('shot_fx', (msg) => {
+    if (msg.id === state.selfId || !state.map) return;
+    const now = performance.now();
+    const last = state.remoteShots.get(msg.id) || 0;
+    if (now - last < 45) return; // 连发武器每帧都画会糊成一片
+    state.remoteShots.set(msg.id, now);
+    const o = { x: msg.o[0], y: msg.o[1], z: msg.o[2] };
+    const dir = { x: msg.d[0], y: msg.d[1], z: msg.d[2] };
+    const rec = state.players.get(msg.id);
+    // 枪口位置：从模型前方偏移一点，避免火焰从眼睛里喷出来
+    const muzzle = { x: o.x + dir.x * 0.45, y: o.y - 0.16 + dir.y * 0.45, z: o.z + dir.z * 0.45 };
+    effects.muzzleAt(muzzle, dir, msg.ads ? 0.16 : 0.24);
+    const sp = sfx.space(o);
+    if (sp.dist < 90) {
+      const pellets = Math.min(4, msg.n || 1);
+      for (let i = 0; i < pellets; i++) {
+        const spread = pellets > 1 ? 0.055 : 0.012;
+        const d2 = {
+          x: dir.x + (Math.random() - 0.5) * spread,
+          y: dir.y + (Math.random() - 0.5) * spread,
+          z: dir.z + (Math.random() - 0.5) * spread,
+        };
+        const len = Math.hypot(d2.x, d2.y, d2.z) || 1;
+        d2.x /= len; d2.y /= len; d2.z /= len;
+        let maxT = 90;
+        for (const box of state.map.colliders) {
+          const t = rayAABB(o, d2, box.min, box.max);
+          if (t < maxT) maxT = t;
+        }
+        const to = { x: o.x + d2.x * maxT, y: o.y + d2.y * maxT, z: o.z + d2.z * maxT };
+        if (msg.w === 'railgun' || msg.w === 'energy_rifle') effects.beam(muzzle, to, 0x7fe0ff, 0.03);
+        else effects.tracer(muzzle, to, msg.w === 'longshot' ? 0xffd9a0 : 0xa8d8ff);
+        // 近失弹：弹道离相机 2.2m 以内 → 呼啸声
+        const cam = renderer.camera.position;
+        if (distPointSegment(cam, muzzle, to) < 2.2 && sp.dist > 1.5) sfx.whiz({ x: muzzle.x, y: muzzle.y, z: muzzle.z });
+      }
+    }
+    sfx.shot(remoteShotSound(msg.s, msg.w), o);
+    if (rec) {
+      // 受击/开火轻微后仰：直接体现在模型上，远处也能看出"这人在开枪"
+      rec.flinch = 1;
+    }
   });
   net.on('explosion', (msg) => {
     effects.explosion(msg.pos);
-    sfx.explosion();
+    sfx.explosion(msg.pos);
     if (state.self.alive && distance(state.self.pos, msg.pos) < 12) hud.damageFlash();
     dispatchMods(state.mods, 'explosion', msg);
   });
@@ -693,10 +796,10 @@ function wireEvents() {
     sfx.boost();
   });
   net.on('reloading', (msg) => {
-    sfx.reload();
-    // 触发换弹动画：时长取该武器实际 reloadTime，保证动画与服务器逻辑同步收尾
+    // 换弹动画/音效都以该武器真实 reloadTime 为时长，动画与服务器逻辑同步收尾
     const def = weaponDef(msg?.weapon || state.selfWeaponId) || {};
     const dur = def.reloadTime || 1.8;
+    sfx.reload(def.sound || 'rifle', dur);
     state.self.reloadAnim = { t: 0, dur: Math.max(0.4, dur) };
   });
   net.on('use_progress', (msg) => {
@@ -777,6 +880,32 @@ function reasonText(reason) {
   }[reason] || '';
 }
 
+// 点到线段的最近距离（用于判断子弹是否从耳边擦过）
+function distPointSegment(p, a, b) {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const abz = b.z - a.z;
+  const apx = p.x - a.x;
+  const apy = p.y - a.y;
+  const apz = p.z - a.z;
+  const len2 = abx * abx + aby * aby + abz * abz;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, (apx * abx + apy * aby + apz * abz) / len2)) : 0;
+  const dx = apx - abx * t;
+  const dy = apy - aby * t;
+  const dz = apz - abz * t;
+  return Math.hypot(dx, dy, dz);
+}
+
+// 服务端只给 sound 名，Mod 武器可能给了内置音效表里没有的值 → 回落到按 id 判断
+function remoteShotSound(snd, id) {
+  const known = ['pistol', 'smg', 'rifle', 'shotgun', 'sniper', 'lmg', 'energy', 'cryo', 'rail'];
+  if (snd && known.includes(snd)) return snd;
+  if (id === 'railgun') return 'rail';
+  if (id === 'energy_rifle') return 'energy';
+  if (id === 'cryo_gun') return 'cryo';
+  return 'rifle';
+}
+
 // ---------------- 快照与插值 ----------------
 function handleState(msg) {
   state.lastStateAt = performance.now();
@@ -798,7 +927,14 @@ function handleState(msg) {
       renderer.scene.add(mesh);
       const tag = buildNameTag(e.n, e.h, e.mx || (e.zb ? PHYS.ZOMBIE_HP : 100), !!e.zb, e.t, !!e.bc, e.ft || 0);
       renderer.scene.add(tag);
-      rec = { last: e, next: e, t0: performance.now(), mesh, tag, zombie: !!e.zb, team: e.t, tagHp: -1, tagName: '', tagZombie: null, tagTeam: null, tagCarrier: null, tagMax: -1, tagFt: -1 };
+      rec = {
+        last: e, next: e, t0: performance.now(), mesh, tag,
+        zombie: !!e.zb, team: e.t,
+        tagHp: -1, tagName: '', tagZombie: null, tagTeam: null, tagCarrier: null, tagMax: -1, tagFt: -1,
+        alive: !!e.al, crouch: 0, pitch: 0, speed: 0, death: null, flinch: 0,
+        lastX: e.x, lastZ: e.z, lastT: performance.now(),
+        phase: Math.random() * Math.PI * 2,
+      };
       state.players.set(e.i, rec);
       window.__nameTagCount = state.players.size;
     } else {
@@ -813,9 +949,27 @@ function handleState(msg) {
         rec.mesh = mesh;
         rec.zombie = !!e.zb;
         rec.team = e.t;
+        rec.parts = null;
       }
     }
-    rec.mesh.visible = !!e.al;
+    rec.alive = !!e.al;
+    rec.crouch = e.cr ? 1 : 0;
+    rec.pitch = e.pi || 0;
+    // 位移速度（用于行走/奔跑动画）：按快照间隔归一化后做指数平滑，避免抖动
+    const nowMs = performance.now();
+    const dts = Math.max(0.03, (nowMs - rec.lastT) / 1000);
+    const inst = Math.hypot(e.x - rec.lastX, e.z - rec.lastZ) / dts;
+    rec.speed = rec.speed + (Math.min(12, inst) - rec.speed) * Math.min(1, dts * 8);
+    rec.lastX = e.x;
+    rec.lastZ = e.z;
+    rec.lastT = nowMs;
+    if (rec.alive) {
+      rec.mesh.visible = true;
+      rec.death = null;
+    } else if (!rec.death) {
+      rec.mesh.visible = false;
+      if (rec.tag) rec.tag.visible = false;
+    }
     if (rec.tag && (rec.tagHp !== e.h || rec.tagName !== e.n || rec.tagZombie !== !!e.zb || rec.tagTeam !== e.t || rec.tagCarrier !== !!e.bc || rec.tagMax !== (e.mx || 0) || rec.tagFt !== (e.ft || 0))) {
       rec.tagHp = e.h;
       rec.tagName = e.n;
@@ -834,16 +988,13 @@ function handleState(msg) {
       rec.tag.userData.redraw();
     }
   }
+  // 快照里没出现的玩家（离房/换图）直接清理
   for (const [id, rec] of state.players) {
     if (!seen.has(id)) {
       renderer.scene.remove(rec.mesh);
       if (rec.tag) renderer.scene.remove(rec.tag);
       state.players.delete(id);
     }
-  }
-  for (const [id, m] of state.grenadeMeshes) {
-    renderer.scene.remove(m);
-    state.grenadeMeshes.delete(id);
   }
 
   // 投掷物
@@ -904,6 +1055,9 @@ function applySelfState(e) {
   s.boughtItems = e.bi || [];
   s.kills = e.k ?? s.kills ?? 0;
   s.deaths = e.d ?? s.deaths ?? 0;
+  s.armor = e.a ?? 0;
+  // 复活倒计时：-1 表示本回合不再复活（拆弹阵亡 / 决战阵亡）
+  hud.setRespawn(e.ra ?? -1, e.al ? true : false);
   // 诊断：出生后是否掉出地图
   window.__self = { y: e.y, alive: !!e.al };
   window.__minSelfY = Math.min(window.__minSelfY ?? Infinity, e.y);
@@ -1003,7 +1157,9 @@ function weaponIdForSlot(slot) {
     const cur = state.selfWeaponId;
     const def = weaponDef(cur);
     if (def && def.slot === 2) return cur;
-    return state.selfPrimaryId || 'arc17';
+    // 未知主武器时不要乐观切到一把"想象中的枪"（旧实现兜底 arc17，
+    // 拆弹模式刚出生按 2 会先闪出一把步枪再被房主打回手枪）。
+    return state.selfPrimaryId;
   }
   if (slot === 3) return 'thunder';
   return null;
@@ -1386,6 +1542,90 @@ function moving() {
   return s.alive && s.grounded && (s.vel.x ** 2 + s.vel.z ** 2) > 0.4;
 }
 
+function updateRemotePlayers(dt, now) {
+  for (const rec of state.players.values()) {
+    const mesh = rec.mesh;
+    const parts = mesh.userData.parts;
+
+    // ---- 倒地：向后塌倒 → 停留 → 隐藏（比瞬间消失清楚得多）----
+    if (rec.death) {
+      rec.death.t += dt;
+      const k = Math.min(1, rec.death.t / rec.death.dur);
+      const e = easeOutCubic(k);
+      mesh.rotation.x = -1.45 * e;
+      mesh.position.y = (rec.death.baseY ?? rec.next.y) - 0.06 * e;
+      mesh.visible = true;
+      if (k >= 1) {
+        rec.death.hold = (rec.death.hold || 0) + dt;
+        if (rec.death.hold > 1.1) {
+          mesh.visible = false;
+          rec.death = null;
+        }
+      }
+      if (rec.tag) rec.tag.visible = false;
+      continue;
+    }
+    if (!rec.next.al) {
+      mesh.visible = false;
+      if (rec.tag) rec.tag.visible = false;
+      continue;
+    }
+
+    // ---- 位置 / 朝向插值（50ms 缓冲 + 100ms 窗口）----
+    const t = clamp((now - rec.t0 - 50) / 100, 0, 1);
+    const a = rec.last;
+    const b = rec.next;
+    const speed = rec.speed || 0;
+    const moving = speed > 0.5;
+    const amp = Math.min(1, speed / 5);
+    // 步频跟着实际速度走；停下来时相位继续缓慢推进，保留轻微呼吸感
+    rec.phase += dt * (moving ? 4.6 + speed * 0.9 : 1.5);
+    const swing = Math.sin(rec.phase) * 0.62 * amp;
+    const bob = moving ? Math.abs(Math.sin(rec.phase)) * 0.05 * amp : Math.sin(rec.phase * 0.8) * 0.008;
+    mesh.position.set(lerp(a.x, b.x, t), lerp(a.y, b.y, t) + bob, lerp(a.z, b.z, t));
+    mesh.rotation.y = angLerp(a.ya, b.ya, t);
+    // 受击/开火后仰（0.25 → 0 衰减）
+    if (rec.flinch > 0) rec.flinch = Math.max(0, rec.flinch - dt * 4);
+    mesh.rotation.x = -0.16 * rec.flinch;
+    mesh.visible = true;
+
+    // 蹲下：整体压到 0.68 高（脚底仍贴地），同时把名牌放低
+    const crouch = rec.crouch ? 1 : 0;
+    const targetSy = crouch ? 0.68 : 1;
+    mesh.scale.y += (targetSy - mesh.scale.y) * Math.min(1, dt * 14);
+
+    if (parts) {
+      if (rec.zombie) {
+        // 丧尸：双臂前伸、随步伐左右晃、躯干含胸
+        const s = Math.sin(rec.phase) * (0.18 + 0.12 * amp);
+        parts.armL.rotation.x = -1.15 + s * 0.6;
+        parts.armR.rotation.x = -1.2 - s * 0.6;
+        parts.legL.rotation.x = swing * 0.85;
+        parts.legR.rotation.x = -swing * 0.85;
+        parts.torso.rotation.x = 0.16 + 0.06 * amp;
+      } else {
+        // 人类：双手持枪，手臂只做呼吸微动，靠腿和躯干表现走姿
+        parts.armL.rotation.x = -1.34 + Math.sin(rec.phase * 2) * 0.025 * amp;
+        parts.armR.rotation.x = -1.28 - Math.sin(rec.phase * 2) * 0.025 * amp;
+        parts.legL.rotation.x = swing;
+        parts.legR.rotation.x = -swing;
+        parts.torso.rotation.x = 0.02 + 0.05 * amp;
+      }
+      if (crouch) {
+        parts.legL.rotation.x = -0.95;
+        parts.legR.rotation.x = -0.55;
+      }
+      // 头部俯仰跟随快照里的 pitch：远处也能看出对手在瞄高还是瞄低
+      parts.head.rotation.x = clamp(-rec.pitch * 0.6, -0.7, 0.7) + (rec.zombie ? 0.12 : 0);
+    }
+
+    if (rec.tag) {
+      rec.tag.position.set(mesh.position.x, mesh.position.y + (crouch ? 2.05 : 2.42), mesh.position.z);
+      rec.tag.visible = true;
+    }
+  }
+}
+
 function updateCrosshair(dt, frame) {
   const s = state.self;
   const ap = frame.ads && !s.isZombie && s.alive ? adsParams(state.selfWeaponId) : state.activeAds;
@@ -1408,6 +1648,10 @@ function updateCrosshair(dt, frame) {
     lines[2].style.width = `${12 + gap}px`;
     lines[3].style.width = `${12 + gap}px`;
   }
+  // 弹匣见底：准星转为琥珀色提示，比等打空了才听到空仓声更早
+  const magSize = def.magSize || 0;
+  const low = !def.melee && !s.isZombie && magSize > 1 && (state.self.ammo ?? 0) <= Math.ceil(magSize * 0.25);
+  el.classList.toggle('low-ammo', !!low);
 }
 
 function fireVisuals(frame) {
@@ -1506,6 +1750,7 @@ function loop(now) {
   // 触控视角复用同一结果（见 setupTouch 回调），确保开镜降速对触屏同样生效
   input.effectiveSens = input.sensitivity;
   if (state.wasGrounded === false && state.self.grounded) sfx.land();
+  if (state.wasGrounded === true && !state.self.grounded) sfx.jump();
   state.wasGrounded = state.self.grounded;
   if (now - state.lastPingAt > 2000) {
     state.lastPingAt = now;
@@ -1513,35 +1758,12 @@ function loop(now) {
   }
   fireVisuals(frame);
   updateCamera(dt, frame);
+  // 听者跟随相机：空间化音效靠它算距离与左右声像
+  sfx.updateListener(renderer.camera);
   updateCrosshair(dt, frame);
 
-  // 其他玩家插值
-  for (const rec of state.players.values()) {
-    if (!rec.next.al) {
-      rec.mesh.visible = false;
-      continue;
-    }
-    const t = clamp((now - rec.t0 - 50) / 100, 0, 1);
-    const a = rec.last;
-    const b = rec.next;
-    rec.mesh.position.set(lerp(a.x, b.x, t), lerp(a.y, b.y, t), lerp(a.z, b.z, t));
-    rec.mesh.rotation.y = angLerp(a.ya, b.ya, t);
-    rec.mesh.visible = true;
-    if (rec.tag) {
-      rec.tag.position.set(rec.mesh.position.x, rec.mesh.position.y + 2.5, rec.mesh.position.z);
-      rec.tag.visible = rec.mesh.visible;
-    }
-    // 简易行走动画
-    const speed = Math.hypot(b.x - a.x, b.z - a.z) * 10;
-    const bob = speed > 0.5 ? Math.sin(now * 0.014) * 0.04 : 0;
-    rec.mesh.position.y += bob;
-    const parts = rec.mesh.userData.parts;
-    if (parts) {
-      const swing = speed > 0.5 ? Math.sin(now * 0.014) * 0.45 : 0;
-      parts.armL.rotation.x = swing;
-      parts.armR.rotation.x = -swing;
-    }
-  }
+  // 其他玩家：位置插值 + 第三人称动画（行走/呼吸/下蹲/丧尸蹒跚/倒地）
+  updateRemotePlayers(dt, now);
 
   // 炸弹灯闪烁（仅已安放时）
   if (state.bombMesh?.userData.light && state.bombMesh.userData.planted) {
@@ -1560,6 +1782,15 @@ function loop(now) {
   }
   hud.setRound(state.round);
   hud.setStatus(net.connected);
+  // FPS：每 0.5s 结算一次，避免每帧改 DOM
+  state.frames = (state.frames || 0) + 1;
+  state.fpsT = (state.fpsT || 0) + dt;
+  if (state.fpsT >= 0.5) {
+    state.fps = Math.round(state.frames / state.fpsT);
+    state.frames = 0;
+    state.fpsT = 0;
+    if (settings.fps) hud.setFps(state.fps, net.isHost);
+  }
   if (state.buyOpen && now - state.lastBuyRenderAt > 250) {
     state.lastBuyRenderAt = now;
     renderBuyUI();
@@ -1682,7 +1913,7 @@ function renderBuyUI() {
       ? state.selfWeaponId
       : state.zombieEquippedId;
     hud.showZombieMenu(
-      { money: state.self.money ?? 0, items: state.zombieCatalog, equippedId: equipped },
+      { money: state.self.money ?? 0, items: state.zombieCatalog, equippedId: equipped, armor: state.self.armor ?? 0 },
       (item) => {
         net.send({ type: 'zselect', item });
         closeBuy();
@@ -1713,6 +1944,9 @@ function closeBuy() {
 function rebuildMap(msg) {
   if (state.mapGroup) renderer.scene.remove(state.mapGroup);
   state.map = MAPS[msg.map] || state.map;
+  // 天空/雾/光照都是按地图配置的，换图必须一起换，否则会沿用上一张图的氛围
+  renderer.setupSky(state.map.sky);
+  renderer.setupLights(state.map);
   state.mapGroup = buildMapMesh(state.map);
   renderer.scene.add(state.mapGroup);
   if (state.bombMesh) {
@@ -1733,6 +1967,16 @@ window.__testUpdateSelf = updateSelf;
 window.__slotOf = slotOfWeapon;
 window.__gameState = () => ({ inGame: state.inGame, selfId: state.selfId, connected: state.connected, mode: state.mode, netHost: net.isHost });
 window.__zombieCatalog = () => state.zombieCatalog;
+// 房主侧诊断：回合/阶段/模拟时间/存活数（离线排查计时与出生问题用）
+window.__roomState = () => {
+  const r = net.host?.room;
+  if (!r) return null;
+  return {
+    time: +r.time.toFixed(2), phase: r.phase, round: r.roundNum, paused: !!r.paused,
+    alive: [...r.players.values()].filter((p) => p.alive).length,
+    me: (() => { const p = r.players.get(state.selfId); return p ? { alive: p.alive, y: +p.pos.y.toFixed(2), team: p.team, hp: p.hp } : null; })(),
+  };
+};
 window.__selfIsZombie = () => !!state.self.isZombie;
 window.__selfWeaponId = () => state.selfWeaponId;
 window.__selfMoney = () => state.self.money ?? 0;
@@ -1741,7 +1985,38 @@ window.__weaponDef = (id) => {
   const d = weaponDef(id);
   return d ? { name: d.name, slot: d.slot, fireRate: d.fireRate, auto: !!d.auto, sound: d.sound } : null;
 };
+// 开发用：直接切图（含服务端碰撞与出生点同步），方便逐图检查美术与 Bot 寻路
+window.__debugMap = (id) => {
+  const r = net.host?.room;
+  if (!r || !MAPS[id]) return false;
+  r.mapId = id;
+  r.map = MAPS[id];
+  r.ammoBoxes = (r.map.ammoBoxes || []).map((b) => ({ ...b, available: true, respawnAt: 0 }));
+  r.healthBoxes = (r.map.healthBoxes || []).map((b) => ({ ...b, available: true, respawnAt: 0 }));
+  r.spawnAll();
+  rebuildMap({ map: id, mapName: MAPS[id].name });
+  return true;
+};
 window.__sceneChildren = () => renderer.scene.children.length;
+window.__debugRender = () => ({
+  env: !!renderer.scene.environment,
+  envType: renderer.scene.environment?.mapping ?? null,
+  envIntensity: renderer.scene.environmentIntensity,
+  vm: state.viewmodel ? state.viewmodel.children.filter((c) => c.isMesh).map((c) => ({
+    color: c.material.color.getHexString(),
+    metalness: c.material.metalness,
+    roughness: c.material.roughness,
+    hasEnv: !!c.material.envMap,
+    visible: c.visible,
+  })) : null,
+  lights: renderer.scene.children.filter((c) => c.isLight).map((l) => [l.type, l.intensity]),
+  cam: [+renderer.camera.position.x.toFixed(2), +renderer.camera.position.y.toFixed(2), +renderer.camera.position.z.toFixed(2)],
+  mapChildren: state.mapGroup ? state.mapGroup.children.length : -1,
+  mapId: state.map && state.map.id,
+  fogNear: renderer.scene.fog && renderer.scene.fog.near,
+  selfPos: [+state.self.pos.x.toFixed(2), +state.self.pos.y.toFixed(2), +state.self.pos.z.toFixed(2)],
+  bg: renderer.scene.background && renderer.scene.background.getHexString && renderer.scene.background.getHexString(),
+});
 window.__fpsProbe = () => { let frames = 0; const t0 = performance.now(); return new Promise((res) => { function tick() { frames++; if (performance.now() - t0 >= 2000) res(frames / 2); else requestAnimationFrame(tick); } requestAnimationFrame(tick); }); };
 
 function boot() {
@@ -1772,6 +2047,14 @@ function boot() {
     leaveRoom();
   };
   $('pause-btn').onclick = () => openPauseMenu();
+  // 暂停面板里进设置：不能冒泡到 #paused 的"点击继续"，否则一进设置就自动解除暂停
+  $('pause-settings-btn').onclick = (e) => {
+    e.stopPropagation();
+    sfx.click();
+    $('paused').classList.add('hidden');
+    $('menu').classList.add('hidden');
+    $('settings').classList.remove('hidden');
+  };
   // 菜单 Mod 列表：读取静态清单（浏览器无 /api/mods 接口；用 import.meta.url 定位，避免 ../ 解析到 /mods）
   fetch(new URL('../mods/manifest.json', import.meta.url))
     .then((r) => r.json())

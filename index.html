@@ -21,6 +21,9 @@
         <span class="ch-dot"></span>
         <div id="hitmarker" class="hidden"><i class="hm hm-tl"></i><i class="hm hm-tr"></i><i class="hm hm-bl"></i><i class="hm hm-br"></i></div>
       </div>
+      <div id="dmg-numbers"></div>
+      <div id="dmg-dirs"></div>
+      <div id="kill-confirm"></div>
       <div id="vignette"></div>
       <div id="lowhp"></div>
       <div id="banner"><div id="banner-title"></div><div id="banner-sub"></div></div>
@@ -32,6 +35,7 @@
         <div id="team-label"></div>
         <div id="money" class="hidden">💰 800</div>
         <div id="ping">--</div>
+        <div id="fps" class="hidden">-- FPS</div>
         <div id="round-label">第 0 回合</div>
         <div id="room-code" title="点击复制房间码"></div>
       </div>
@@ -66,7 +70,14 @@
       <div id="mods-hud"></div>
       <div id="dead-msg" class="hidden">你已阵亡 · 等待下一回合</div>
       <div id="hint">按 = 菜单（暂停/退出） · 点击画面锁定鼠标 · 按住 Alt 释放鼠标 · WASD 移动 · Shift 疾跑 · Ctrl 下蹲 · 右键开镜 · R 换弹 · E 互动 · F 丧尸加速 · 1-4 换枪 · Tab 记分板</div>
-      <div id="paused" class="hidden"><div class="panel"><div>已暂停 · 点击画面继续</div><button id="leave-room-btn" class="btn">退出房间</button></div></div>
+      <div id="paused" class="hidden">
+        <div class="panel">
+          <div class="pause-title">已暂停</div>
+          <div class="pause-sub">点击画面继续（离线模式会同时冻结对局）</div>
+          <button id="pause-settings-btn" class="btn">设置</button>
+          <button id="leave-room-btn" class="btn">退出房间</button>
+        </div>
+      </div>
     </div>
 
     <div id="menu">
@@ -99,6 +110,23 @@
           </select>
         </div>
         <div class="menu-row">
+          <label>Bot 数量</label>
+          <select id="bot-select">
+            <option value="3">3 个（轻松练枪）</option>
+            <option value="5">5 个</option>
+            <option value="8" selected>8 个（默认）</option>
+            <option value="10">10 个（混战）</option>
+          </select>
+        </div>
+        <div class="menu-row">
+          <label>Bot 难度</label>
+          <select id="difficulty-select">
+            <option value="0">休闲</option>
+            <option value="1" selected>普通</option>
+            <option value="2">高手</option>
+          </select>
+        </div>
+        <div class="menu-row">
           <label>房间码</label>
           <input id="room-input" value="" placeholder="留空 = 快速加入 / 建房">
         </div>
@@ -106,6 +134,15 @@
         <button id="offline-btn" class="btn">离线游玩</button>
         <button id="settings-btn" class="btn">设置</button>
         <div id="menu-mods" class="menu-mods"></div>
+        <details id="help-box">
+          <summary>操作说明 / 玩法</summary>
+          <div class="help-body">
+            <p><b>键鼠</b>：WASD 移动 · Shift 疾跑 · Ctrl/C 下蹲 · 空格 跳 · 左键开火 · 右键开镜 · R 换弹 · E 互动（拾弹/安放/拆除/补给）· F 丧尸加速 · 1-4 换枪 · 滚轮切枪 · Tab 记分板 · B 商店 · 回车聊天 · = 或 ☰ 暂停</p>
+            <p><b>触屏</b>：左侧热区任意点起手 = 摇杆（推满自动疾跑）· 右侧滑动转向 · 右下角按钮为射击/跳/蹲/换弹/开镜 · 顶部条为全屏/计分/聊天/商店/技能</p>
+            <p><b>拆弹</b>：T 方拾取炸弹 → 到 A/B 点按住 E 安放 → 40 秒倒计时；CT 方在炸弹旁按住 E 拆除（5 秒）。存活者跨回合保留装备。</p>
+            <p><b>生化</b>：人类撑到时间结束，或清空丧尸；被咬到即感染，8 秒后以丧尸重生。最后 60 秒进入「琉璃决战」，全员强化且不再复活。</p>
+          </div>
+        </details>
         <div class="footer">程序化建模 · 零外部美术资产 · 房主权威 · VibeHub P2P 联机</div>
       </div>
     </div>
@@ -120,6 +157,8 @@
         <label>背景音乐 <select id="set-music"><option value="1">开</option><option value="0">关</option></select></label>
         <label>阴影 <select id="set-shadow"><option value="1">开</option><option value="0">关</option></select></label>
         <label>画质 <select id="set-quality"><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label>
+        <label>显示 FPS <select id="set-fps"><option value="1">开</option><option value="0">关</option></select></label>
+        <label>准星颜色 <input type="color" id="set-crosshair" value="#dcffe6"></label>
         <button id="settings-close" class="btn primary">返回</button>
       </div>
     </div>
@@ -130,6 +169,5 @@
   <!-- VibeHub SDK：必须用绝对地址（游戏页面在 vibeapps 域，相对路径会 404） -->
   <script src="https://vibe.lumigrav.space/sdk/v3/vibehub.js"></script>
   <script type="module" src="./js/main.js"></script>
-<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"37d6f97ae1b54103bc14c617b1c7b64a","r":1}' crossorigin="anonymous"></script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a24e36507844b6a8',t:'MTc4NTY4NTU1Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>

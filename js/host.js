@@ -18,14 +18,16 @@ export class Host {
     this.lastInputAt = new Map();  // peerId -> 上次输入时间戳（节流）
   }
 
-  async init({ name, mode, team }) {
+  async init({ name, mode, team, bots, botSkill }) {
     const m = mode === 'zombie' ? 'zombie' : 'defusal';
+    const botCount = Number.isFinite(+bots) ? Math.max(0, Math.min(10, +bots)) : CONFIG.bots;
     const room = new Room({
       id: this.net.offline ? 'offline' : 'p2p',
       mode: m,
       mapId: m === 'defusal' ? 'vertex' : 'containment',
       maxPlayers: CONFIG.maxPlayers,
-      botCount: CONFIG.bots,
+      botCount,
+      botSkill: Number.isFinite(+botSkill) ? +botSkill : CONFIG.botSkill,
       config: { mods: CONFIG.mods },
     });
     this.room = room;
@@ -143,7 +145,7 @@ export class Host {
     room.spawnJoiner(p);
   }
 
-  // 下发 welcome + 选枪目录（含 Mod 注册的主武器）
+  // 下发 welcome + 选枪目录（含 Mod 注册的主武器 + 生化模式可买的护甲/手雷）
   sendWelcome(p, fromId, mode) {
     this.room.sendTo(p.id, {
       type: 'welcome',
@@ -155,11 +157,15 @@ export class Host {
       tickRate: 30,
       mods: (this.room.modResults.loaded || []).map((m) => m.id),
     });
+    const items = [...this.room.weapons.values()]
+      .filter((d) => d.slot === 2)
+      .map((d) => ({ id: d.id, name: d.name, cost: weaponPrice(d), def: d, kind: 'weapon' }));
+    // 生化模式没有购买阶段，护甲/手雷走选枪面板
+    items.push({ id: 'armor', name: '护甲（100）', cost: 650, kind: 'armor' });
+    items.push({ id: 'grenade', name: '手雷 ×1', cost: 300, kind: 'grenade' });
     this.room.sendTo(p.id, {
       type: 'weapon_catalog',
-      items: [...this.room.weapons.values()]
-        .filter((d) => d.slot === 2)
-        .map((d) => ({ id: d.id, name: d.name, cost: weaponPrice(d), def: d })),
+      items,
       equipped: p.weapons.get(2)?.def.id ?? null,
     });
   }

@@ -11,6 +11,8 @@ export const CONFIG = Object.freeze({
   bots: 8,
   maxPlayers: 12,
   mods: true,
+  // 0=休闲 1=普通 2=高手（影响 Bot 瞄准误差与转向速度）
+  botSkill: 1,
 });
 
 export function resolveWork() {

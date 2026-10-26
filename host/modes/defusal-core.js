@@ -61,7 +61,12 @@ export class DefusalRound {
   }
 
   teamEliminated(team) {
+    // 炸弹已安放时，T 全灭不等于回合结束：炸弹仍在倒计时，
+    // CT 必须真正拆掉才算赢（否则"最后一个 T 被打死瞬间 CT 得分"，
+    // 让 40 秒的炸弹倒计时完全失去意义）。
+    if (this.bombPlanted && team === 'T') return false;
     this.end(team === 'T' ? 'CT' : 'T', 'elimination');
+    return true;
   }
 
   end(winner, reason, extra = {}) {

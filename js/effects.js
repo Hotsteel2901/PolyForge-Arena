@@ -102,6 +102,50 @@ export class Effects {
     }));
   }
 
+  // 远端点位的枪口焰（他人开火）：只有贴图与短促光源，不带弹壳
+  muzzleAt(pos, dir = null, scale = 0.26) {
+    const sprite = this._flashSprite();
+    sprite.position.set(pos.x, pos.y, pos.z);
+    sprite.scale.set(scale, scale, 1);
+    this._add(sprite, 0.06, { fade: true, userData: { opacity: 0.85 } });
+    // 沿枪口方向的短烟柱：让远处的开火点更"有体积"，而不是一个纯发光点
+    if (dir) {
+      for (let i = 0; i < 2; i++) {
+        const s = new THREE.Mesh(
+          new THREE.SphereGeometry(0.06 + Math.random() * 0.04, 6, 5),
+          new THREE.MeshBasicMaterial({ color: 0x8a8578, transparent: true, opacity: 0.22 })
+        );
+        s.position.set(pos.x + dir.x * 0.16 * i, pos.y + dir.y * 0.16 * i, pos.z + dir.z * 0.16 * i);
+        this._add(s, 0.35, {
+          vel: { x: dir.x * 1.4, y: 0.5, z: dir.z * 1.4 },
+          grow: 1.1,
+          fade: true,
+          userData: { opacity: 0.22 },
+        });
+      }
+    }
+  }
+
+  // 粗光束：磁轨 / 能量武器的贯穿弹道，用细圆柱代替 1px 线段，视觉上更"重"
+  beam(from, to, color = 0x7fe0ff, radius = 0.035) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const len = Math.hypot(dx, dy, dz) || 0.01;
+    const geo = new THREE.CylinderGeometry(radius, radius * 0.6, len, 6, 1, true);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }));
+    mesh.position.set(from.x + dx / 2, from.y + dy / 2, from.z + dz / 2);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(dx / len, dy / len, dz / len));
+    this._add(mesh, 0.12, { fade: true, userData: { opacity: 0.85 } });
+  }
+
   tracer(from, to, color = 0xa8d8ff) {
     const geo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(from.x, from.y, from.z),
@@ -163,8 +207,11 @@ export class Effects {
   }
 
   impact(pos, kind = 'spark') {
-    const color = kind === 'blood' ? 0xb41f1f : kind === 'heal' ? 0x59e89a : 0xffd27a;
-    const count = kind === 'blood' ? 10 : 8;
+    const color = kind === 'blood' ? 0xb41f1f
+      : kind === 'heal' ? 0x59e89a
+        : kind === 'dust' ? 0xbfb6a2
+          : 0xffd27a;
+    const count = kind === 'blood' ? 10 : kind === 'dust' ? 6 : 8;
     for (let i = 0; i < count; i++) {
       const m = new THREE.Mesh(
         new THREE.SphereGeometry(0.022, 5, 4),

@@ -8,7 +8,10 @@ body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; col
 /* ---------- HUD ---------- */
 #hud { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
 #crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 44px; height: 44px; }
-.ch-line { position: absolute; background: rgba(220,255,230,.92); box-shadow: 0 0 3px #000; transition: all .08s; }
+.ch-line { position: absolute; background: var(--ch-color, rgba(220,255,230,.92)); box-shadow: 0 0 3px #000; transition: all .08s; }
+/* 弹匣见底：准星变琥珀色（比空仓声更早的提示） */
+#crosshair.low-ammo .ch-line { background: #ffb347; box-shadow: 0 0 6px rgba(255,140,40,.7); }
+#crosshair.low-ammo .ch-dot { background: #ffb347; }
 .ch-t { left: 21px; top: 0; width: 2px; height: 12px; }
 .ch-b { left: 21px; bottom: 0; width: 2px; height: 12px; }
 .ch-l { top: 21px; left: 0; width: 12px; height: 2px; }
@@ -23,7 +26,9 @@ body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; col
 #hitmarker.hs .hm { background: #ffd23f; box-shadow: 0 0 6px #ff9; }
 #vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 55%, rgba(120,10,10,.75)); opacity: 0; transition: opacity .15s; }
 #lowhp { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 45%, rgba(160,0,0,.55)); opacity: 0; transition: opacity .5s; }
-#topbar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 18px; align-items: center; background: rgba(8,14,10,.62); padding: 7px 18px; border-radius: 8px; font-size: 15px; backdrop-filter: blur(4px); }
+#topbar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 14px; align-items: center; background: rgba(8,14,10,.62); padding: 7px 16px; border-radius: 8px; font-size: 15px; backdrop-filter: blur(4px); white-space: nowrap; max-width: calc(100vw - 110px); }
+/* 顶栏任何一项都不许换行：换行会把"拆弹模式""第 1 回合"折成两行，整条栏被撑成两层 */
+#topbar > * { white-space: nowrap; flex: 0 0 auto; }
 #timer { font-size: 22px; font-weight: 700; color: #fff; min-width: 52px; text-align: center; }
 #score-ct { color: #69b7ff; font-weight: 700; }
 #score-t { color: #ffab5e; font-weight: 700; }
@@ -56,6 +61,7 @@ body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; col
 #slots { display: flex; gap: 6px; justify-content: flex-end; margin-top: 10px; }
 .slot { width: 34px; height: 34px; border: 1px solid rgba(255,255,255,.25); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 15px; background: rgba(10,20,14,.6); }
 .slot.on { border-color: #9fe6b6; background: rgba(80,160,110,.5); box-shadow: 0 0 8px rgba(120,255,170,.35); }
+.slot.off { opacity: .3; }
 #scoreboard { position: absolute; inset: 0; background: rgba(4,10,6,.72); display: flex; flex-direction: column; align-items: center; padding-top: 9vh; }
 .sb-title { font-size: 26px; font-weight: 800; margin-bottom: 14px; letter-spacing: 2px; }
 #score-table { border-collapse: collapse; min-width: 560px; max-width: 90vw; }
@@ -80,7 +86,8 @@ body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; col
 #chat-input { pointer-events: auto; width: 100%; margin-top: 6px; background: rgba(8,14,10,.8); border: 1px solid rgba(255,255,255,.25); color: #fff; padding: 7px 10px; border-radius: 6px; font-size: 14px; outline: none; }
 #mods-hud { position: absolute; right: 14px; top: 150px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 #dead-msg { position: absolute; left: 50%; top: 36%; transform: translateX(-50%); font-size: 26px; font-weight: 800; color: #ff6b5e; text-shadow: 0 2px 8px #000; }
-#hint { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); font-size: 11px; color: rgba(220,240,228,.55); text-align: center; white-space: nowrap; }
+#hint { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); font-size: 11px; color: rgba(220,240,228,.55); text-align: center; white-space: normal; max-width: 56vw; line-height: 1.5; transition: opacity .6s; }
+#hint.faded { opacity: 0; }
 #paused { position: absolute; inset: 0; background: rgba(4,10,6,.5); display: flex; align-items: center; justify-content: center; pointer-events: auto; }
 #banner { position: absolute; top: 22%; left: 50%; transform: translate(-50%, -50%); text-align: center; opacity: 0; transition: opacity .25s; pointer-events: none; }
 #banner.show { opacity: 1; }
@@ -88,11 +95,13 @@ body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; col
 #banner-sub { font-size: 13px; color: #d6e9dd; text-shadow: 0 2px 8px #000; margin-top: 5px; }
 
 /* ---------- 菜单 ---------- */
-#menu { position: absolute; inset: 0; background: radial-gradient(ellipse at 30% 20%, #14291d 0%, #081009 70%); display: flex; align-items: center; justify-content: center; z-index: 20; }
-.menu-inner { width: 380px; max-width: 92vw; display: flex; flex-direction: column; gap: 12px; }
+/* 菜单项变多后（Bot 数量/难度/说明）在 720p 上会顶出视口：
+ * 用 overflow-y:auto + margin:auto 让内容短时居中、长时可滚动，绝不裁掉"进入战斗"按钮。 */
+#menu { position: absolute; inset: 0; background: radial-gradient(ellipse at 30% 20%, #14291d 0%, #081009 70%); display: flex; align-items: flex-start; justify-content: center; z-index: 20; overflow-y: auto; padding: 18px 0; }
+.menu-inner { width: 380px; max-width: 92vw; display: flex; flex-direction: column; gap: 10px; margin: auto; }
 .logo { font-size: 42px; font-weight: 900; letter-spacing: 4px; background: linear-gradient(90deg, #7be8a2, #d8ffab); -webkit-background-clip: text; background-clip: text; color: transparent; text-align: center; }
 .logo span { font-weight: 400; color: #a8c8b4; -webkit-text-fill-color: #a8c8b4; }
-.tagline { text-align: center; color: #8ba898; font-size: 13px; margin-bottom: 14px; }
+.tagline { text-align: center; color: #8ba898; font-size: 13px; margin-bottom: 8px; }
 .menu-row { display: flex; flex-direction: column; gap: 5px; }
 .menu-row label { font-size: 12px; color: #9fc3ad; }
 .menu-row input, .menu-row select { background: #0d1a12; border: 1px solid #2d4a39; color: #e8f2ea; padding: 10px 12px; border-radius: 8px; font-size: 15px; outline: none; }
@@ -102,7 +111,7 @@ body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; col
 .btn.primary { background: linear-gradient(90deg, #2f9e5b, #3fbe70); border: none; font-weight: 700; font-size: 16px; color: #06210f; }
 .btn.primary:hover { filter: brightness(1.12); }
 .btn.mini { padding: 5px 12px; font-size: 12px; border-radius: 16px; }
-#auth-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 14px; }
+#auth-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 8px; }
 #auth-status { font-size: 12px; color: #8fb3a0; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #my-stats { text-align: center; font-size: 12px; color: #9fe6b6; margin-bottom: 10px; }
 .menu-mods { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; min-height: 22px; }
@@ -332,3 +341,60 @@ body {
 #use-progress-label { font-size: 14px; color: #ffe08a; text-shadow: 0 1px 4px #000; margin-bottom: 6px; }
 #use-progress-bar { height: 10px; background: rgba(0,0,0,.55); border-radius: 5px; overflow: hidden; border: 1px solid rgba(255,255,255,.25); }
 #use-progress-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg,#ffd35e,#ff9a3c); transition: width .08s; }
+
+/* ---------- 命中反馈 / 受击方向 / 击杀确认 / FPS ---------- */
+#dmg-numbers, #dmg-dirs { position: absolute; inset: 0; pointer-events: none; }
+.dmg-num {
+  position: absolute;
+  transform: translate(-50%, 0);
+  font-size: 17px;
+  font-weight: 800;
+  color: #ffffff;
+  text-shadow: 0 2px 6px #000, 0 0 10px rgba(255,255,255,.35);
+  animation: dmg-rise .72s ease-out forwards;
+}
+.dmg-num.hs { color: #ffd23f; font-size: 21px; text-shadow: 0 2px 8px #000, 0 0 12px rgba(255,200,60,.6); }
+@keyframes dmg-rise {
+  0% { opacity: 0; transform: translate(-50%, 6px) scale(.8); }
+  18% { opacity: 1; transform: translate(-50%, 0) scale(1.08); }
+  100% { opacity: 0; transform: translate(calc(-50% + var(--dx, 0px) * .35), -46px) scale(.95); }
+}
+.dmg-dir {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 0; height: 0;
+  border-left: 9px solid transparent;
+  border-right: 9px solid transparent;
+  border-bottom: 17px solid rgba(255,70,55,.92);
+  filter: drop-shadow(0 0 6px rgba(255,60,40,.8));
+  animation: dmg-dir-fade 1.05s ease-out forwards;
+}
+@keyframes dmg-dir-fade {
+  0% { opacity: 0; }
+  12% { opacity: 1; }
+  100% { opacity: 0; }
+}
+#kill-confirm {
+  position: absolute; left: 50%; top: 56%;
+  transform: translateX(-50%) scale(.9);
+  font-size: 19px; font-weight: 900; letter-spacing: 2px;
+  color: #9fe6b6; text-shadow: 0 2px 8px #000, 0 0 16px rgba(120,255,170,.55);
+  opacity: 0; transition: opacity .12s, transform .12s;
+}
+#kill-confirm.show { opacity: 1; transform: translateX(-50%) scale(1); }
+#kill-confirm.hs { color: #ffd23f; text-shadow: 0 2px 8px #000, 0 0 18px rgba(255,200,60,.7); }
+#fps { color: #7c9787; font-size: 11px; min-width: 52px; text-align: right; }
+
+/* 暂停面板补充 */
+.pause-title { font-size: 22px; font-weight: 800; text-align: center; }
+.pause-sub { font-size: 12px; color: #8fb3a0; text-align: center; margin-bottom: 8px; }
+
+/* 菜单：操作说明折叠块 */
+#help-box { font-size: 12px; color: #9fc3ad; border: 1px solid #22402f; border-radius: 8px; padding: 8px 10px; background: rgba(10,24,16,.5); }
+#help-box summary { cursor: pointer; color: #9fe6b6; font-size: 12px; }
+#help-box[open] summary { margin-bottom: 6px; }
+.help-body p { margin: 5px 0; line-height: 1.55; }
+.help-body b { color: #cfe4d8; }
+
+/* 设置里的取色器 */
+.panel input[type=color] { width: 100%; height: 30px; padding: 0; border: 1px solid #2d4a39; border-radius: 6px; background: #0d1a12; }

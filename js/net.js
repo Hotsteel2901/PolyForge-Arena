@@ -75,7 +75,7 @@ export class Net {
   // roomId 提供时直接加入指定房间（分享房间码）；若该房间不存在则创建并成为房主。
   // 防卡死：非房主在等待 welcome 时设超时（房主刷新后残留的“陈旧房主”房间会让 welcome
   // 永远不来，导致转圈卡死）；自动建房场景超时后换全新房间重试一次。
-  async join({ name, mode, team, roomId, quick = true }) {
+  async join({ name, mode, team, roomId, quick = true, bots, botSkill }) {
     if (!this.vibe) throw new Error('VibeHub 未初始化');
     const explicit = !!roomId;
     const originalCode = explicit ? String(roomId).trim().toUpperCase() : '';
@@ -175,7 +175,7 @@ export class Net {
       if (this.isHost) {
         this.connected = true;
         this.host = new Host(this);
-        await this.host.init({ name, mode, team });
+        await this.host.init({ name, mode, team, bots, botSkill });
         return { isHost: true, roomId: targetId };
       }
 

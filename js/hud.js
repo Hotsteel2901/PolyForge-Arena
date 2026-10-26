@@ -51,6 +51,10 @@ export class Hud {
       hint: $('hint'),
       modsHud: $('mods-hud'),
       skill: $('skill'),
+      dmgNumbers: $('dmg-numbers'),
+      dmgDirs: $('dmg-dirs'),
+      killConfirm: $('kill-confirm'),
+      fps: $('fps'),
     };
     const slotNames = ['刀', '手枪', '主武器', '雷'];
     this.slotEls = [];
@@ -66,6 +70,8 @@ export class Hud {
     this.chatCb = null;
     this.mode = 'defusal';
     this.team = 1;
+    this.primaryId = null;
+    this.deathInfo = null;
     this.bombCarrier = false;
     this.bomb = null;
     this.chatOpen = false;
@@ -101,9 +107,89 @@ export class Hud {
   setMode(mode, label) {
     this.mode = mode;
     this.r.modeLabel.textContent = label;
-    this.r.money.classList.toggle('hidden', mode !== 'defusal');
+    // 生化模式也有经济（选枪/买护甲手雷），金钱必须一直可见
+    this.r.money.classList.remove('hidden');
     this.r.scoreCt.textContent = mode === 'defusal' ? 'CT 0' : '人类 0';
     this.r.scoreT.textContent = mode === 'defusal' ? 'T 0' : '僵尸 0';
+  }
+
+  // 一局结束/重进时清空临时 UI，避免上一局的击杀播报、伤害数字残留
+  reset() {
+    this._lastRespawnHtml = null;
+    this.r.killfeed.innerHTML = '';
+    this.r.dmgNumbers.innerHTML = '';
+    this.r.dmgDirs.innerHTML = '';
+    this.r.killConfirm.classList.remove('show');
+    this.r.deadMsg.classList.add('hidden');
+    this.r.deadMsg.textContent = '你已阵亡 · 等待下一回合';
+    this.r.vignette.style.opacity = '0';
+    this.r.lowhp.style.opacity = '0';
+    this.r.banner.classList.remove('show');
+    this.deathInfo = null;
+  }
+
+  setCrosshairColor(color) {
+    if (!color) return;
+    this.r.crosshair.style.setProperty('--ch-color', color);
+  }
+
+  // 复活倒计时：拆弹模式阵亡后本回合不再复活（-1），生化模式显示秒数
+  setRespawn(sec, alive = false) {
+    if (alive) {
+      this.r.deadMsg.classList.add('hidden');
+      return;
+    }
+    const info = this.deathInfo ? `${this.deathInfo}<br>` : '';
+    const body = sec > 0 ? `复活倒计时 <b>${sec}</b>s` : '等待下一回合';
+    const html = info + body;
+    // 快照 20Hz：内容没变就不重写 innerHTML，避免每帧解析 DOM
+    if (this._lastRespawnHtml !== html) {
+      this._lastRespawnHtml = html;
+      this.r.deadMsg.innerHTML = html;
+    }
+    this.r.deadMsg.classList.remove('hidden');
+  }
+
+  setDeathInfo(killerName, weapon, headshot = false) {
+    this._lastRespawnHtml = null;
+    const w = WEAPON_SHORT[weapon] || weaponName(weapon) || '未知武器';
+    this.deathInfo = `被 <b>${killerName || '环境'}</b> 用 ${w} 击杀${headshot ? '（爆头）' : ''}`;
+  }
+
+  // 受击方向箭头：angle 为相对朝向的弧度（0=正前，正=右侧）
+  damageDirection(angle) {
+    const el = document.createElement('i');
+    el.className = 'dmg-dir';
+    el.style.transform = `translate(-50%, -50%) rotate(${angle}rad) translateY(-132px)`;
+    this.r.dmgDirs.appendChild(el);
+    setTimeout(() => el.remove(), 1100);
+  }
+
+  // 命中伤害数字：从准星附近弹出并上飘
+  damageNumber(dmg, headshot = false) {
+    const el = document.createElement('span');
+    el.className = 'dmg-num' + (headshot ? ' hs' : '');
+    el.textContent = dmg > 0 ? dmg : '';
+    if (!el.textContent) return;
+    const dx = (Math.random() - 0.5) * 54;
+    el.style.setProperty('--dx', `${dx}px`);
+    el.style.left = `calc(50% + ${dx}px)`;
+    el.style.top = 'calc(50% + 26px)';
+    this.r.dmgNumbers.appendChild(el);
+    setTimeout(() => el.remove(), 750);
+  }
+
+  killConfirm(headshot = false, weapon = '') {
+    const el = this.r.killConfirm;
+    el.textContent = headshot ? '爆头击杀' : '击杀';
+    el.classList.toggle('hs', !!headshot);
+    el.classList.add('show');
+    clearTimeout(this.killTimer);
+    this.killTimer = setTimeout(() => el.classList.remove('show'), 800);
+  }
+
+  setFps(v, host = false) {
+    this.r.fps.textContent = `${v} FPS${host ? ' · 房主' : ''}`;
   }
 
   setSelf(entry, round, alive) {
@@ -130,7 +216,6 @@ export class Hud {
       this.r.teamLabel.style.color = entry.z ? '#ff9b8a' : '#7fd0ff';
     }
     this.r.lowhp.style.opacity = alive && entry.h < 32 ? '1' : '0';
-    this.r.deadMsg.classList.toggle('hidden', alive || (round && round.ph === 'buy'));
     this.setSlots(entry.w, entry.zb);
     this.updateObjective(round);
     // 生化丧尸 F 加速技能指示
@@ -146,19 +231,23 @@ export class Hud {
 
   setSlots(activeId, zombie) {
     let activeSlot = -1;
-    const ids = ['fang', 'k9', 'arc17', 'thunder'];
+    const d = weaponDef(activeId);
+    // 记录最近一次持有的主武器：切到手枪时 "主武器" 槽位仍应显示那把枪的名字
+    if (d && d.slot === 2) this.primaryId = activeId;
     if (zombie) {
       activeSlot = 0;
       this.slotEls[0].textContent = '爪';
     } else {
-      this.slotEls.forEach((el, i) => {
-        const id = ids[i];
-        el.textContent = WEAPON_SHORT[id] || id;
-      });
-      const d = weaponDef(activeId);
-      activeSlot = d ? d.slot : ids.indexOf(activeId);
+      this.slotEls[0].textContent = WEAPON_SHORT.fang;
+      this.slotEls[1].textContent = WEAPON_SHORT.k9;
+      this.slotEls[2].textContent = WEAPON_SHORT[this.primaryId] || '主';
+      this.slotEls[3].textContent = WEAPON_SHORT.thunder;
+      activeSlot = d ? d.slot : -1;
     }
-    this.slotEls.forEach((el, i) => el.classList.toggle('on', i === activeSlot));
+    this.slotEls.forEach((el, i) => {
+      el.classList.toggle('on', i === activeSlot);
+      el.classList.toggle('off', zombie && i !== 0);
+    });
   }
 
   setRound(round) {
@@ -323,6 +412,9 @@ export class Hud {
     this.r.scoreboard.classList.toggle('hidden', !show);
     if (!show) return;
     const rows = [...players].sort((a, b) => b.sc - a.sc || b.k - a.k);
+    const alive = rows.filter((p) => p.al).length;
+    const title = this.r.scoreboard.querySelector('.sb-title');
+    if (title) title.textContent = `记分板 · 存活 ${alive}/${rows.length}`;
     this.r.scoreTable.innerHTML = '';
     for (const p of rows) {
       const tr = document.createElement('tr');
@@ -412,8 +504,8 @@ export class Hud {
     this.buyCb = null;
   }
 
-  // 生化模式选枪界面：列出所有主武器（含 Mod 武器），点击立即装备
-  showZombieMenu({ money, items = [], equippedId }, cb, closeCb) {
+  // 生化模式商店：列出所有主武器（含 Mod 武器）+ 护甲 / 手雷，点击立即装备
+  showZombieMenu({ money, items = [], equippedId, armor = 0 }, cb, closeCb) {
     this.buyCb = cb;
     this.buyCloseCb = closeCb;
     document.getElementById('buy-title').textContent = '选枪（生化）';
@@ -422,11 +514,15 @@ export class Hud {
     // 主循环每 250ms 重绘，先清掉上次追加的提示行，避免无限堆积
     grid.parentElement.querySelectorAll('.buy-refunds').forEach((el) => el.remove());
     for (const it of items) {
-      const isEquipped = it.id === equippedId;
+      const isEquipped = it.kind === 'weapon' ? it.id === equippedId
+        : it.kind === 'armor' ? armor >= 100
+          : false;
       const canBuy = money >= it.cost && !isEquipped;
       const card = document.createElement('button');
       card.className = 'buy-card' + (canBuy ? '' : ' disabled');
-      card.innerHTML = `<b>${it.name || it.id}${isEquipped ? '（当前）' : ''}</b><span>$${it.cost}</span>`;
+      const tag = it.kind === 'armor' ? (armor >= 100 ? '（已满）' : `（${Math.round(armor)}）`)
+        : it.kind === 'grenade' ? '' : (isEquipped ? '（当前）' : '');
+      card.innerHTML = `<b>${it.name || it.id}${tag}</b><span>$${it.cost}</span>`;
       card.onclick = () => {
         if (canBuy && this.buyCb) this.buyCb(it.id);
       };
@@ -434,11 +530,11 @@ export class Hud {
     }
     const refundRow = document.createElement('div');
     refundRow.className = 'buy-refunds empty';
-    refundRow.textContent = '选择后立即装备（重生后保持） · 每击杀一只丧尸 +$200';
+    refundRow.textContent = '武器/护甲选择后立即生效 · 每击杀一只丧尸 +$200';
     grid.after(refundRow);
     document.getElementById('buy-money').textContent = money;
     const countdown = document.getElementById('buy-countdown');
-    countdown.textContent = '随时可按 B 打开选枪';
+    countdown.textContent = '随时可按 B 打开';
     this.buyEl.classList.remove('hidden');
   }
 
