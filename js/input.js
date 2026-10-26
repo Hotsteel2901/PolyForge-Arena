@@ -20,6 +20,8 @@ export class Input {
     this.scoreboard = false;
     this.chatOpen = false;
     this.locked = false;
+    // 是否在局内：菜单/加载/结算时不吃 Tab、数字键、空格（否则主菜单里 Tab 无法切换焦点）
+    this.active = false;
     this.skillQueued = false;
     this.sensitivity = 1;
     this.effectiveSens = 1; // 当前有效灵敏度（已含 ADS 倍率），供触控视角复用
@@ -87,6 +89,7 @@ export class Input {
   keydown(e) {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     if (this.chatOpen) return; // 聊天中输入时不吃游戏按键
+    if (!this.active) return;  // 不在局内：把键盘交还给浏览器/页面控件
     if (e.code === 'KeyR') this.reloadQueued = true;
     if (e.code === 'KeyF') this.skillQueued = true; // 丧尸加速技能
     if (e.code === 'KeyE') this.useQueued = true;
@@ -116,6 +119,8 @@ export class Input {
   }
 
   mousedown(e) {
+    // 点购买菜单/暂停面板/设置时不应顺带开一枪（旧的 document 级监听会误触发）
+    if (!this.locked && e.target !== this.canvas) return;
     if (e.button === 0) this.fire = true;
     if (e.button === 2) this.ads = true;
   }

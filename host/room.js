@@ -5,12 +5,13 @@ import { BUILTIN_WEAPONS, WeaponRuntime, shouldFire } from '../shared/weapons.js
 import { PRICES, START_MONEY, MONEY_CAP, WIN_REWARD, LOSS_REWARD, PLANT_REWARD, DEFUSE_REWARD, costOf, ZOMBIE_START_MONEY, weaponPrice } from '../shared/economy.js';
 import { MAPS } from '../shared/maps/index.js';
 import { movePlayer } from '../shared/physics.js';
-import { createPlayer, spawnPlayer, damagePlayer, killPlayer, respawnZombie, giveLoadout } from './player.js';
+import { createPlayer, spawnPlayer, damagePlayer, killPlayer, respawnZombie, giveLoadout, eyeHeight } from './player.js';
 import { performShot } from './hitscan.js';
 import { tickBot, createBotBrain } from './bots.js';
 import { loadServerMods } from './mods.js';
 import { DefusalRound } from './modes/defusal-core.js';
 import { ZombieMatch } from './modes/zombie-core.js';
+import { directionFromAngles } from '../shared/math.js';
 
 const BOT_NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliet'];
 
@@ -20,13 +21,16 @@ const ROUNDS_TO_WIN = 8;
 const ZOMBIE_DURATION = 330;
 
 export class Room {
-  constructor({ id, mode, mapId, maxPlayers = 12, botCount = 8, config = {} }) {
+  constructor({ id, mode, mapId, maxPlayers = 12, botCount = 8, botSkill = 1, config = {} }) {
     this.id = id;
     this.mode = mode;
     this.mapId = mapId;
     this.map = MAPS[mapId];
     this.maxPlayers = maxPlayers;
     this.botCount = botCount;
+    // botSkill：0=休闲 1=普通 2=高手。传入非法值时回落到 1（普通）
+    this.botSkill = [0, 1, 2].includes(Number(botSkill)) ? Number(botSkill) : 1;
+    this.paused = false;
     this.config = config;
     this.players = new Map();
     this.connections = new Map(); // id -> send fn
@@ -51,7 +55,7 @@ export class Room {
     this.buyUntil = 0;
     this.roundEndAt = 0;
     this.matchEndAt = 0;
-    this.rotation = mode === 'defusal' ? ['vertex', 'obsidian'] : ['containment', 'obsidian'];
+    this.rotation = mode === 'defusal' ? ['vertex', 'obsidian', 'foundry'] : ['containment', 'hive', 'obsidian'];
     this.rotationIdx = 0;
     this.modResults = { loaded: [], errors: [] };
     this.log = (...args) => console.log(`[room:${id}]`, ...args);
@@ -481,8 +485,38 @@ export class Room {
   }
 
   // ---------- 主循环 ----------
+  //
+  // 计时用"真实经过时间 + 固定步长"的累加器，而不是"每次回调推进 1/30 秒"。
+  // 浏览器在页面繁忙（低端手机、软件渲染、后台标签）时会明显降低 setInterval 频率，
+  // 旧写法下 30Hz 回调变成 5Hz，整局游戏就以 1/6 速度慢放：回合 105 秒要跑十分钟，
+  // 人物移动/射速也跟着变慢。改为按墙钟时间补步后，帧率再低也是实时速度，
+  // 只是模拟精度下降（每次调用最多补 6 步，追不上就丢弃积压，避免雪崩）。
   tick() {
-    const dt = TICK_MS / 1000;
+    // 离线单人时暂停：连时间一起冻结，复活计时/回合计时/炸弹倒计时都不会"偷偷走"
+    if (this.paused) {
+      this.lastTickAt = performance.now();
+      return;
+    }
+    const now = performance.now();
+    if (!this.lastTickAt) this.lastTickAt = now;
+    let elapsed = (now - this.lastTickAt) / 1000;
+    this.lastTickAt = now;
+    if (elapsed > 0.6) elapsed = 0.6; // 切后台回来：最多补 0.6s
+    this.acc = (this.acc || 0) + elapsed;
+    const stepSec = TICK_MS / 1000;
+    // 上限 12 步（0.4s）：低端机上 setInterval 会被压到 10~15Hz，
+    // 上限太低会让对局整体慢放（实测 6 步只有 0.4 倍速）；过高则可能雪崩。
+    let steps = 0;
+    while (this.acc >= stepSec && steps < 12) {
+      this.step(stepSec);
+      this.acc -= stepSec;
+      steps += 1;
+    }
+    if (steps >= 12) this.acc = 0; // 追不上就放弃积压，宁可慢一点也不要卡死
+  }
+
+  // 单步模拟（固定 dt）
+  step(dt) {
     this.time += dt;
     this.tickAcc += TICK_MS;
     this.snapAcc += TICK_MS;
@@ -686,8 +720,31 @@ export class Room {
         w.fire(now);
         performShot(this, p, def, { rewindTime: p.inputAt ?? this.time });
         this.sendTo(p.id, { type: 'shot', weapon: def.id, ammo: w.ammo, reserve: w.reserve });
+        this.broadcastShotFx(p, def);
       }
     }
+    // 换弹是"按一次"的边沿动作：处理完立刻清掉，
+    // 否则客户端某帧输入丢失时这个 1 会一直留在 p.input 里，导致打一发就自动换弹。
+    p.input.r = 0;
+  }
+
+  // 广播开火表现（给除射手外的所有客户端）：弹道起点 + 方向 + 武器音效类型。
+  // 之前只有射手自己收得到 shot 事件，别人开火既没有声音也没有曳光弹，
+  // 等于"敌人枪声完全静音"，是 FPS 里最致命的听觉信息缺失。
+  broadcastShotFx(p, def) {
+    if (def.melee || def.projectile) return;
+    const dir = directionFromAngles(p.yaw, p.pitch);
+    const oy = eyeHeight(p);
+    this.broadcast({
+      type: 'shot_fx',
+      id: p.id,
+      w: def.id,
+      s: def.sound || 'rifle',
+      o: [+p.pos.x.toFixed(2), +oy.toFixed(2), +p.pos.z.toFixed(2)],
+      d: [+dir.x.toFixed(3), +dir.y.toFixed(3), +dir.z.toFixed(3)],
+      n: def.pellets ?? 1,
+      ads: p.input?.ads ? 1 : 0,
+    });
   }
 
   processUse(p, dt) {
@@ -928,22 +985,53 @@ export class Room {
   }
 
   autoBuy(bot) {
-    // 先买买得起的主武器（优先更好更贵的），没主武器才买
-    if (!bot.weapons.has(2)) {
-      const order = ['longshot', 'bruiser', 'arc17', 'warden', 'vx9'];
-      for (const id of order) {
-        if (bot.money >= PRICES[id]) return this.handleBuy(bot, id);
+    // 循环买齐：主武器 → 护甲 → 手雷（余额允许时）。
+    // 旧实现每回合只买一件（买完主武器就 return），Bot 永远没有护甲和手雷，
+    // 打到中后期人类玩家随便一枪就能带走，房间难度直线下降。
+    let bought = 0;
+    for (let guard = 0; guard < 4; guard++) {
+      if (!bot.weapons.has(2)) {
+        const order = ['longshot', 'bruiser', 'arc17', 'warden', 'vx9'];
+        const pick = order.find((id) => bot.money >= PRICES[id]);
+        if (pick) { this.handleBuy(bot, pick); bought++; continue; }
+      } else if (bot.armor < 60 && bot.money >= PRICES.armor) {
+        this.handleBuy(bot, 'armor');
+        bought++;
+        continue;
+      } else if (bot.grenadeCount < 2 && bot.money >= PRICES.grenade) {
+        this.handleBuy(bot, 'grenade');
+        bought++;
+        continue;
       }
+      break;
     }
-    if (bot.money >= PRICES.armor && bot.armor < 60) return this.handleBuy(bot, 'armor');
-    if (bot.money >= PRICES.grenade && bot.grenadeCount < 2) return this.handleBuy(bot, 'grenade');
-    return { ok: false };
+    return bought ? { ok: true } : { ok: false };
   }
 
   // 生化模式选枪：随时可打开（B），人类选择一把主武器并立即装备（重生后保持）
+  // 另支持护甲 / 手雷：生化模式没有购买阶段，若不开放这两项，人类的 1000 初始资金
+  // 只能买枪，护甲永远停在出生时的 50，面对尸爪几乎没有容错。
   handleZombieSelect(p, item) {
     if (this.mode !== MODE.ZOMBIE) return { ok: false, reason: 'phase' };
     if (!p || p.isZombie) return { ok: false, reason: 'player' };
+    if (item === 'armor') {
+      if (p.armor >= 100) return { ok: false, reason: 'already' };
+      if (p.money < PRICES.armor) return { ok: false, reason: 'money' };
+      p.money -= PRICES.armor;
+      p.armor = 100;
+      this.sendTo(p.id, { type: 'buy_ok', item, money: p.money });
+      this.sendTo(p.id, { type: 'zselect_ok', item, money: p.money });
+      return { ok: true };
+    }
+    if (item === 'grenade') {
+      if (p.grenadeCount >= 5) return { ok: false, reason: 'max' };
+      if (p.money < PRICES.grenade) return { ok: false, reason: 'money' };
+      p.money -= PRICES.grenade;
+      p.grenadeCount += 1;
+      this.sendTo(p.id, { type: 'buy_ok', item, money: p.money });
+      this.sendTo(p.id, { type: 'zselect_ok', item, money: p.money });
+      return { ok: true };
+    }
     const def = this.weapons.get(item);
     if (!def || def.slot !== 2) return { ok: false, reason: 'item' };
     const cost = weaponPrice(def);
@@ -1025,6 +1113,8 @@ export class Room {
         // 技能冷却（秒）：必须用独立字段，曾经误用 sc 覆盖了得分
         sk: Math.max(0, Math.ceil((p.skillReadyAt || 0) - this.time)),
         bo: p.boostUntil && this.time < p.boostUntil ? 1 : 0,
+        // 复活倒计时（秒）：-1 表示本回合不再复活（拆弹阵亡 / 决战阵亡）
+        ra: p.alive ? 0 : (p.respawnAt ? Math.max(0, Math.ceil(p.respawnAt - this.time)) : -1),
       });
     }
     const r = {

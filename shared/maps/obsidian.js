@@ -24,14 +24,21 @@ const B = (x1, z1, x2, z2, y = 3, h = 0.2) => ({
   type: 'floor',
 });
 
-// 四组 8 级楼梯（每级高 0.4m，深 1m），自动台阶可步行上楼
+// 四组 8 级楼梯（每级高 0.4m，深 1m），自动台阶可步行上楼。
+//
+// 方向必须"由内向外升高"：旧实现 i 从 0 递增时 z 从 -25（外墙侧）走到 -17（内缘侧），
+// 高度也从 0.4 升到 3.2 —— 等于把最高一级台阶摆在内缘，从广场看是一堵 3.2m 的墙，
+// 上层平台（B 点所在）根本走不上去，人和 Bot 都只能靠运气跳。
+// 现在低台阶贴内缘、高台阶贴外墙，从广场直接走到平台上。
 const stairs = [];
 for (let i = 0; i < 8; i++) {
-  const y0 = 0.4 * i;
-  stairs.push({ min: { x: -3, y: y0, z: -25 + i }, max: { x: 3, y: y0 + 0.4, z: -24 + i }, type: 'step' });
-  stairs.push({ min: { x: -3, y: y0, z: 24 - i }, max: { x: 3, y: y0 + 0.4, z: 25 - i }, type: 'step' });
-  stairs.push({ min: { x: -25 + i, y: y0, z: -3 }, max: { x: -24 + i, y: y0 + 0.4, z: 3 }, type: 'step' });
-  stairs.push({ min: { x: 24 - i, y: y0, z: -3 }, max: { x: 25 - i, y: y0 + 0.4, z: 3 }, type: 'step' });
+  const h = 0.4 * (i + 1);
+  // 北 / 南：z 从 ∓18 向墙推进
+  stairs.push({ min: { x: -3, y: 0, z: -18 - i }, max: { x: 3, y: h, z: -17 - i }, type: 'step' });
+  stairs.push({ min: { x: -3, y: 0, z: 17 + i }, max: { x: 3, y: h, z: 18 + i }, type: 'step' });
+  // 西 / 东：x 从 ∓18 向墙推进
+  stairs.push({ min: { x: -18 - i, y: 0, z: -3 }, max: { x: -17 - i, y: h, z: 3 }, type: 'step' });
+  stairs.push({ min: { x: 17 + i, y: 0, z: -3 }, max: { x: 18 + i, y: h, z: 3 }, type: 'step' });
 }
 
 export default {
@@ -40,6 +47,8 @@ export default {
   mode: 'defusal',
   size: { x: 52, z: 52 },
   sky: { top: 0x232b3a, bottom: 0x8b93a3, fog: 0x5c6472 },
+  // 双层结构：上层平台的底面需要额外环境光，否则从桥下看是一片死黑
+  lighting: { ambient: 0.18, hemi: 1.05, sun: 2.2 },
   spawns: {
     CT: [
       { x: -22, z: -6, yaw: -Math.PI / 2 },

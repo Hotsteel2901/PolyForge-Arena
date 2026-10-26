@@ -4,6 +4,61 @@ import { TEAM } from '../shared/constants.js';
 import { distance, angLerp } from '../shared/math.js';
 import { traceWorld } from './hitscan.js';
 
+// 难度标定：0=休闲 1=普通 2=高手
+// 只调「瞄准误差」与「转向收敛」这两个直接影响命中率的量，
+// 不改移动速度/血量，避免难度变成"跑得更快的人"。
+const SKILL = [
+  { err: 1.45, converge: 0.78, cadence: 1.25 }, // 休闲：误差更大、转得更慢、点射更慢
+  { err: 1.0, converge: 1.0, cadence: 1.0 },
+  { err: 0.68, converge: 1.22, cadence: 0.9 },  // 高手：误差更小、转向更快
+];
+
+function skillOf(room) {
+  return SKILL[room.botSkill ?? 1] || SKILL[1];
+}
+
+// 二叉堆：导航图自动生成后有 800~1500 个节点，
+// 旧的"线性扫最小值"Dijkstra 是 O(n²)，8 个 Bot 每 1.2s 各跑一次会明显吃 CPU。
+class MinHeap {
+  constructor() {
+    this.a = [];
+  }
+
+  push(node, d) {
+    this.a.push([d, node]);
+    let i = this.a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (this.a[p][0] <= this.a[i][0]) break;
+      [this.a[p], this.a[i]] = [this.a[i], this.a[p]];
+      i = p;
+    }
+  }
+
+  pop() {
+    const top = this.a[0];
+    const last = this.a.pop();
+    if (!this.a.length) return top;
+    this.a[0] = last;
+    let i = 0;
+    for (;;) {
+      const l = i * 2 + 1;
+      const r = l + 1;
+      let m = i;
+      if (l < this.a.length && this.a[l][0] < this.a[m][0]) m = l;
+      if (r < this.a.length && this.a[r][0] < this.a[m][0]) m = r;
+      if (m === i) break;
+      [this.a[m], this.a[i]] = [this.a[i], this.a[m]];
+      i = m;
+    }
+    return top;
+  }
+
+  get size() {
+    return this.a.length;
+  }
+}
+
 export function createBotBrain() {
   return {
     goal: null,
@@ -45,6 +100,17 @@ export function tickBot(room, bot) {
   bot.edge.swd = 0;
 
   if (!bot.alive) return;
+
+  // 新回合：清掉上一回合的点位粘滞与路径，否则携带者会沿用旧点位继续原地打转
+  if (b.roundSeen !== room.roundNum) {
+    b.roundSeen = room.roundNum;
+    b.siteChoice = null;
+    b.path = [];
+    b.goal = null;
+    b.nextNode = null;
+    b.decideAt = 0;
+    b.stuckFor = 0;
+  }
 
   if (wantsMove && moved < 0.1) {
     b.stuckFor = (b.stuckFor || 0) + 1 / 30;
@@ -186,7 +252,11 @@ function chooseGoal(room, bot) {
   if (room.mode === 'defusal') {
     if (bot.team === TEAM.T) {
       if (bot.bombCarrier) {
-        const site = room.map.sites[Math.floor(Math.random() * room.map.sites.length)];
+        // 携带者选定点位后必须粘滞：旧实现每 1.2s 重随机一次 A/B，
+        // 目标一变就重排路径，Bot 会在两个点之间来回横跳，永远走不到点里安放。
+        const b = bot.botBrain;
+        if (!b.siteChoice) b.siteChoice = room.map.sites[Math.floor(Math.random() * room.map.sites.length)];
+        const site = b.siteChoice;
         return { x: site.pos.x, z: site.pos.z, y: site.pos.y ?? 0, site };
       }
       const site = room.map.sites[Math.random() < 0.5 ? 0 : 1];
@@ -244,7 +314,8 @@ function nearestNav(nav, pos) {
   return best;
 }
 
-// Dijkstra 最短路（导航图很小，线性取最小距离即可）。沿走廊走，不再贪心斜穿墙体。
+// 最短路径（Dijkstra + 二叉堆）。导航图很小但节点较多，堆比线性扫描快一个数量级。
+// 沿走廊走，不再贪心斜穿墙体。
 function planPath(map, bot, goal) {
   if (!goal) return [];
   const nav = map.nav;
@@ -254,32 +325,30 @@ function planPath(map, bot, goal) {
   if (start === goalIdx) return [nav[start]];
   const dist = new Array(nav.length).fill(Infinity);
   const prev = new Array(nav.length).fill(-1);
-  const visited = new Array(nav.length).fill(false);
+  const done = new Array(nav.length).fill(false);
   dist[start] = 0;
-  for (let it = 0; it < nav.length; it++) {
-    let u = -1;
-    let best = Infinity;
-    for (let i = 0; i < nav.length; i++) {
-      if (!visited[i] && dist[i] < best) {
-        best = dist[i];
-        u = i;
-      }
-    }
-    if (u === -1) break;
-    visited[u] = true;
+  const heap = new MinHeap();
+  heap.push(start, 0);
+  while (heap.size) {
+    const [d, u] = heap.pop();
+    if (done[u]) continue;
+    done[u] = true;
     if (u === goalIdx) break;
     for (const li of nav[u].links || []) {
-      const w = navDist(nav[u], nav[li]);
-      if (dist[u] + w < dist[li]) {
-        dist[li] = dist[u] + w;
+      if (done[li]) continue;
+      const nd = d + navDist(nav[u], nav[li]);
+      if (nd < dist[li]) {
+        dist[li] = nd;
         prev[li] = u;
+        heap.push(li, nd);
       }
     }
   }
   if (dist[goalIdx] === Infinity) return [];
   const path = [];
   let cur = goalIdx;
-  while (cur !== start && cur !== -1) {
+  let guard = 0;
+  while (cur !== start && cur !== -1 && guard++ < nav.length * 2) {
     path.unshift(nav[cur]);
     cur = prev[cur];
   }
@@ -330,6 +399,7 @@ function inputSet(bot, idx, v) {
 function engage(room, bot, enemy, distEnemy) {
   const b = bot.botBrain;
   const now = room.time;
+  const skill = skillOf(room);
   const w = bot.weapons.get(bot.activeSlot);
   const def = w?.def;
 
@@ -342,19 +412,20 @@ function engage(room, bot, enemy, distEnemy) {
     // 旧的"零误差锁定"让丧尸贴脸后爪爪必中，人类毫无生还可能。
     if (now >= b.aimRefreshAt) {
       b.aimRefreshAt = now + 0.2 + Math.random() * 0.25;
-      const errScale = Math.min(0.42, 0.14 + distEnemy * 0.007);
+      const errScale = Math.min(0.42, 0.14 + distEnemy * 0.007) * skill.err;
       b.aimErrX = (Math.random() - 0.5) * errScale;
       b.aimErrY = (Math.random() - 0.5) * errScale * 0.5;
     }
     const zdx = enemy.pos.x - bot.pos.x;
     const zdy = enemy.pos.y + 1.2 - (bot.pos.y + 1.55);
     const zdz = enemy.pos.z - bot.pos.z;
-    bot.yaw = angLerp(bot.yaw, Math.atan2(-zdx, -zdz) + b.aimErrX, 0.46);
-    bot.pitch = angLerp(bot.pitch, Math.atan2(zdy, Math.hypot(zdx, zdz)) + b.aimErrY, 0.46);
+    const zConv = Math.max(0.12, Math.min(0.8, 0.46 * skill.converge));
+    bot.yaw = angLerp(bot.yaw, Math.atan2(-zdx, -zdz) + b.aimErrX, zConv);
+    bot.pitch = angLerp(bot.pitch, Math.atan2(zdy, Math.hypot(zdx, zdz)) + b.aimErrY, zConv);
     if (distEnemy < 2.4) {
       // 挥爪有节奏：不再持续按住，给人类反击与拉开距离的窗口
       bot.input.fire = now >= (b.attackAt || 0) ? 1 : 0;
-      b.attackAt = now + 0.26 + Math.random() * 0.24;
+      b.attackAt = now + (0.26 + Math.random() * 0.24) * skill.cadence;
       bot.input.mv = [1, 0, 0, 0];
     } else {
       moveToward(room, bot, enemy.pos);
@@ -384,16 +455,17 @@ function engage(room, bot, enemy, distEnemy) {
     b.aimRefreshAt = now + 0.2 + Math.random() * 0.25;
     // 误差为 [-errScale/2, errScale/2] 均匀分布，实际平均偏量约 errScale/4。
     // 生化最不准；拆弹也明显降低，避免玩家被瞬间秒杀。
-    const errScale = zombieMode
+    const base = zombieMode
       ? Math.min(0.5, 0.18 + distEnemy * 0.009)
       : Math.min(0.34, 0.10 + distEnemy * 0.0055);
+    const errScale = base * skill.err;
     b.aimErrX = (Math.random() - 0.5) * errScale;
     b.aimErrY = (Math.random() - 0.5) * errScale;
   }
   const dx = enemy.pos.x - bot.pos.x;
   const dy = enemy.pos.y + 1.3 - (bot.pos.y + 1.55);
   const dz = enemy.pos.z - bot.pos.z;
-  const converge = zombieMode ? 0.42 : 0.5;
+  const converge = Math.max(0.14, Math.min(0.86, (zombieMode ? 0.42 : 0.5) * skill.converge));
   bot.yaw = angLerp(bot.yaw, Math.atan2(-dx, -dz) + b.aimErrX, converge);
   bot.pitch = angLerp(bot.pitch, Math.atan2(dy, Math.hypot(dx, dz)) + b.aimErrY, converge);
 
@@ -412,10 +484,10 @@ function engage(room, bot, enemy, distEnemy) {
   if (now >= b.attackAt && aw && aw.canFire(now)) {
     if (adef?.auto || adef?.melee) {
       bot.input.fire = 1;
-      b.attackAt = now + 0.06;
+      b.attackAt = now + 0.06 * skill.cadence;
     } else {
       bot.input.fire = 1;
-      b.attackAt = now + Math.max(0.24, (60 / Math.max(1, adef.fireRate)) * 1.4 + 0.08);
+      b.attackAt = now + Math.max(0.24, (60 / Math.max(1, adef.fireRate)) * 1.4 + 0.08) * skill.cadence;
     }
   }
 
