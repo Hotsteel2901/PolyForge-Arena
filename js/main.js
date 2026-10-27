@@ -18,10 +18,11 @@ import { loadClientMods, dispatchMods } from './mods.js';
 import { CONFIG, resolveWork, VIBE_WORK_PLACEHOLDER } from './config.js';
 import { MAPS } from '../shared/maps/index.js';
 import { MODE_LABEL, PHYS, ZOMBIE_BOOST_SPEED } from '../shared/constants.js';
+import { modeCfg } from '../shared/modes.js';
 import { BUILTIN_WEAPONS, shouldFire } from '../shared/weapons.js';
 import { movePlayer } from '../shared/physics.js';
 import { rayAABB, directionFromAngles, distance, angLerp, lerp, clamp } from '../shared/math.js';
-import { registerModWeapons, weaponDef } from './weapon-registry.js';
+import { registerModWeapons, weaponDef, weaponName } from './weapon-registry.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
@@ -40,7 +41,14 @@ input.onWheel = (dir) => localCycleWeapon(dir);
 
 // touchSens：触控视角专用倍率。与鼠标共用 sens 数值但量纲不同，
 // 默认 2.0 使 0.0022×1×2 ≈ 原有固定值 0.0045，升级后手感零回归。
-const defaultSettings = { sens: 1, touchSens: 2, fov: 75, vol: 0.8, music: true, shadow: true, quality: 'high', fps: false, crosshair: '#dcffe6' };
+const defaultSettings = {
+  sens: 1, touchSens: 2, fov: 75, vol: 0.8, music: true, shadow: true, quality: 'high',
+  fps: false, crosshair: '#dcffe6',
+  adsMode: 'hold',      // hold=按住开镜 / toggle=切换
+  sprintMode: 'hold',   // hold=按住疾跑 / toggle=切换
+  btnScale: 1,          // 移动端按钮整体缩放
+  haptics: true,        // 命中/受伤震动反馈
+};
 const settings = loadSettings();
 
 const state = {
@@ -96,6 +104,10 @@ const state = {
   activeAds: null,    // 开镜参数（关镜回退期间保持，用于补出关镜动画）
   scopeCanvas: null,
   remoteShots: new Map(), // 他人开火的曳光弹节流：id -> 上次时间
+  rules: { gravity: 1 },  // 房主下发的规则表（Mod 可改重力/友伤/伤害倍率）
+  ggLadder: null,         // 军备竞赛武器阶梯
+  scoreLimit: 0,          // 死斗目标击杀数
+  selfLevel: 0,           // 军备竞赛当前等级
   lastHudRoundAt: 0,
   fps: 0,
 };
@@ -122,9 +134,13 @@ function saveSettings() {
 function applySettings() {
   input.sensitivity = settings.sens;
   input.fov = settings.fov;
+  input.adsMode = settings.adsMode || 'hold';
+  input.sprintMode = settings.sprintMode || 'hold';
   sfx.setVolume(settings.vol);
   renderer.applySettings({ shadow: settings.shadow, quality: settings.quality });
   hud.setCrosshairColor(settings.crosshair || '#dcffe6');
+  hud.haptics = !!settings.haptics;
+  document.documentElement.style.setProperty('--btn-scale', String(settings.btnScale ?? 1));
   const fpsEl = $('fps');
   if (fpsEl) fpsEl.classList.toggle('hidden', !settings.fps);
 }
@@ -139,6 +155,10 @@ function bindSettingsUI() {
   $('set-quality').value = settings.quality;
   $('set-fps').value = settings.fps ? '1' : '0';
   $('set-crosshair').value = settings.crosshair || '#dcffe6';
+  $('set-ads').value = settings.adsMode || 'hold';
+  $('set-sprint').value = settings.sprintMode || 'hold';
+  $('set-btnscale').value = String(settings.btnScale ?? 1);
+  $('set-haptics').value = settings.haptics === false ? '0' : '1';
   // 触控灵敏度只对触屏设备有意义，非触屏隐藏该行，避免设置面板出现无效项
   const touchRow = $('set-touch-sens')?.closest('label');
   if (touchRow && !input.isTouchPrimary()) touchRow.classList.add('hidden');
@@ -156,11 +176,20 @@ function bindSettingsUI() {
   $('set-quality').onchange = (e) => { settings.quality = e.target.value; saveSettings(); applySettings(); };
   $('set-fps').onchange = (e) => { settings.fps = e.target.value === '1'; saveSettings(); applySettings(); };
   $('set-crosshair').oninput = (e) => { settings.crosshair = e.target.value; saveSettings(); applySettings(); };
+  $('set-ads').onchange = (e) => { settings.adsMode = e.target.value; saveSettings(); applySettings(); };
+  $('set-sprint').onchange = (e) => { settings.sprintMode = e.target.value; saveSettings(); applySettings(); };
+  $('set-btnscale').onchange = (e) => { settings.btnScale = Number(e.target.value); saveSettings(); applySettings(); };
+  $('set-haptics').onchange = (e) => { settings.haptics = e.target.value === '1'; saveSettings(); applySettings(); };
   $('settings-close').onclick = () => {
     $('settings').classList.add('hidden');
     // 从暂停菜单进来的，返回暂停面板而不是主菜单
     if (state.inGame) { $('paused').classList.remove('hidden'); return; }
     $('menu').classList.remove('hidden');
+  };
+  // 军备竞赛是自由混战：隐藏阵营选择，避免给了选项却无效
+  $('mode-select').onchange = (e) => {
+    const teamRow = $('team-select').closest('.menu-row');
+    if (teamRow) teamRow.classList.toggle('hidden', e.target.value === 'gungame');
   };
   $('settings-btn').onclick = () => {
     $('menu').classList.add('hidden');
@@ -326,8 +355,14 @@ function enterGame(welcome) {
   state.selfName = $('name-input').value.trim() || '战士';
   hud.selfId = welcome.id;
   state.mode = welcome.mode;
+  state.modeCfg = modeCfg(welcome.mode);
+  state.rules = welcome.rules || { gravity: 1 };
+  state.ggLadder = welcome.ladder || null;
+  state.scoreLimit = welcome.scoreLimit || 0;
+  state.selfLevel = 0;
   state.map = MAPS[welcome.map] || MAPS.vertex;
-  hud.setMode(welcome.mode, welcome.modeLabel);
+  hud.setMode(welcome.mode, welcome.modeLabel, { scoreLimit: welcome.scoreLimit });
+  hud.setLadder(welcome.ladder || null, 0);
   hud.setStatus(true);
   // 显示房间码，方便把 code 分享给朋友在「房间码」输入框加入
   if (net.roomId) {
@@ -360,9 +395,10 @@ function enterGame(welcome) {
   renderer.scene.add(state.mapGroup);
   rebuildViewmodel('k9');
   renderer.scene.add(renderer.camera);
+  renderer.setupViewmodelLight();
   state.localSwitchAt = 0;
 
-  const modeText = welcome.mode === 'defusal' ? '拆弹模式' : '生化模式';
+  const modeText = welcome.modeLabel || MODE_LABEL[welcome.mode] || '对局';
   hud.banner(`进入 ${modeText}`, `${welcome.mapName} · ${welcome.mods?.length ? `已加载 ${welcome.mods.length} 个 Mod` : '无 Mod'}`);
   sfx.roundStart();
 
@@ -382,6 +418,7 @@ function enterGame(welcome) {
       else if (dir) localCycleWeapon(dir);
     },
     onChat: openMobileChat,
+    onGrenade: throwGrenadeQuick,
   });
   if (state.touchUI) {
     hud.r.hint.classList.add('hidden');
@@ -408,7 +445,7 @@ function enterGame(welcome) {
     }
   }
 
-  loadClientMods({ net, hud, state }).then((mods) => {
+  loadClientMods({ net, hud, state, settings }).then((mods) => {
     state.mods = mods;
   });
 }
@@ -569,6 +606,8 @@ function wireEvents() {
       dispatchMods(state.mods, msg.type, msg);
     }
   });
+  // 客户端 Mod 可以订阅任意协议消息（kill/damage/hit/shot_fx/round_* …）
+  net.on('*', (msg) => dispatchMods(state.mods, msg && msg.type, msg));
   net.on('welcome', (msg) => enterGame(msg));
   net.on('error', (msg) => {
     $('loading').classList.add('hidden');
@@ -714,7 +753,8 @@ function wireEvents() {
   });
   net.on('round_start', (msg) => {
     hud.hideUseProgress();
-    hud.banner(`第 ${msg.round} 回合开始`, MODE_LABEL[state.mode]);
+    const cfg = modeCfg(state.mode);
+    hud.banner(cfg.rounds ? `第 ${msg.round} 回合开始` : '对局开始', MODE_LABEL[state.mode]);
     if (state.mode === 'defusal') hud.toast('购买结束，回合开始');
     sfx.roundStart();
     dispatchMods(state.mods, 'round_start', msg);
@@ -726,22 +766,50 @@ function wireEvents() {
   });
   net.on('round_end', (msg) => {
     hud.hideUseProgress();
-    const myTeam = state.self.team === 1
-      ? (state.mode === 'defusal' ? 'CT' : 'HUMAN')
-      : (state.mode === 'defusal' ? 'T' : 'ZOMBIE');
-    const win = msg.winner === myTeam;
+    const ffa = state.mode === 'gungame';
+    const myTeam = state.mode === 'defusal' || state.mode === 'tdm'
+      ? (state.self.team === 1 ? 'CT' : 'T')
+      : (state.self.team === 1 ? 'HUMAN' : 'ZOMBIE');
+    const win = ffa ? msg.winnerId === state.selfId : msg.winner === myTeam;
     const winPhrases = ['漂亮！', '干净利落！', '拿下这一分！'];
     const losePhrases = ['可惜…', '下一回合扳回来', '稳住心态'];
     const flavor = (win ? winPhrases : losePhrases)[(msg.round || 1) % 3];
-    hud.banner(winnerText(msg), `第 ${msg.round || '?'} 回合 · ${reasonText(msg.reason)} · ${flavor}`, win);
+    const subtitle = modeCfg(state.mode).rounds
+      ? `第 ${msg.round || '?'} 回合 · ${reasonText(msg.reason)} · ${flavor}`
+      : `${modeCfg(state.mode).label} 结束 · ${reasonText(msg.reason)}`;
+    hud.banner(winnerText(msg), subtitle, win);
     sfx.roundEnd(!!win);
     dispatchMods(state.mods, 'round_end', msg);
   });
   net.on('match_end', (msg) => {
-    hud.banner('比赛结束', `胜者：${msg.winner}`);
+    hud.banner('比赛结束', `胜者：${msg.winnerName || msg.winner}`);
     sfx.roundEnd(true);
     persistMatch(msg);
     dispatchMods(state.mods, 'match_end', msg);
+  });
+  // 军备竞赛：开局阶梯 / 升级 / 夺冠
+  net.on('rules', (msg) => {
+    state.rules = msg.rules || state.rules;
+    dispatchMods(state.mods, 'rules', msg);
+  });
+  net.on('gg_start', (msg) => {
+    state.ggLadder = msg.ladder || state.ggLadder;
+    hud.setLadder(state.ggLadder, 0);
+  });
+  net.on('gg_level', (msg) => {
+    if (msg.id === state.selfId) {
+      state.selfLevel = msg.level;
+      hud.setLadder(state.ggLadder, msg.level);
+      hud.toast(`升级！${msg.weapon ? weaponName(msg.weapon) : ''}  Lv ${msg.level + 1}`);
+      sfx.buy();
+    } else {
+      hud.addKillFeed({ type: 'sys', text: `${msg.name || '玩家'} 升到 Lv ${msg.level + 1}` });
+    }
+    dispatchMods(state.mods, 'gg_level', msg);
+  });
+  net.on('gg_win', (msg) => {
+    hud.banner(`${msg.name || '玩家'} 用匕首夺冠`, '军备竞赛结束');
+    sfx.roundEnd(msg.id === state.selfId);
   });
   net.on('infected', (msg) => {
     if (msg.id === state.selfId) {
@@ -801,6 +869,11 @@ function wireEvents() {
     const dur = def.reloadTime || 1.8;
     sfx.reload(def.sound || 'rifle', dur);
     state.self.reloadAnim = { t: 0, dur: Math.max(0.4, dur) };
+    // 弹匣掉落：从枪身位置往右下掉，是第一人称"真的在换弹"的关键细节
+    if (state.viewmodel && !def.melee && !def.projectile) {
+      const wp = state.viewmodel.localToWorld(new THREE.Vector3(0, -0.16, 0.06));
+      effects.magDrop(wp);
+    }
   });
   net.on('use_progress', (msg) => {
     hud.showUseProgress(msg.action, msg.progress);
@@ -856,13 +929,19 @@ function wireEvents() {
     dispatchMods(state.mods, `mod:${msg.type || ''}`, msg.payload);
   });
   net.on('player_spawn', (msg) => {
+    // 自己出生/复活：把视角对齐房主给的出生朝向，避免复活后盯着墙
+    if (msg.id === state.selfId && Number.isFinite(msg.yaw)) {
+      input.yaw = msg.yaw;
+      input.pitch = 0;
+    }
     if (msg.id === state.selfId) sfx.roundStart();
   });
 }
 
 function winnerText(msg) {
+  if (msg.winner === 'FFA') return msg.winnerName ? `${msg.winnerName} 夺冠` : '对局结束';
   const map = {
-    CT: 'CT 方获胜', T: 'T 方获胜', HUMAN: '人类获胜！', ZOMBIE: '僵尸获胜！', DRAW: '平局 · 各得一分',
+    CT: 'CT 方获胜', T: 'T 方获胜', HUMAN: '人类获胜！', ZOMBIE: '僵尸获胜！', DRAW: '平局',
   };
   return map[msg.winner] || msg.winner;
 }
@@ -1056,6 +1135,11 @@ function applySelfState(e) {
   s.kills = e.k ?? s.kills ?? 0;
   s.deaths = e.d ?? s.deaths ?? 0;
   s.armor = e.a ?? 0;
+  s.grenades = e.g ?? 0;
+  if (e.lv !== undefined && e.lv !== state.selfLevel) {
+    state.selfLevel = e.lv;
+    hud.setLadder(state.ggLadder, e.lv);
+  }
   // 复活倒计时：-1 表示本回合不再复活（拆弹阵亡 / 决战阵亡）
   hud.setRespawn(e.ra ?? -1, e.al ? true : false);
   // 诊断：出生后是否掉出地图
@@ -1119,6 +1203,7 @@ function applySelfState(e) {
   // 切枪按钮：丧尸只有尸爪，切枪无意义（localCycleWeapon 对丧尸直接 return），
   // 置灰避免玩家反复点击却毫无反馈。
   state.touchUI?.setSwitchEnabled?.(!e.zb);
+  state.touchUI?.setGrenadeEnabled?.(!e.zb && (e.g ?? 0) > 0);
 }
 
 // 记住主武器（用于复活/切枪后保持上一把枪）：
@@ -1133,6 +1218,15 @@ function recordPrimary(id) {
 
 // 切换武器：预构建缓存 + 显隐切换，避免每帧同步建模造成卡顿
 function rebuildViewmodel(id) {
+  const slot = weaponDef(id)?.slot ?? -1;
+  // 不同长度的武器需要不同的持握距离：长枪贴着 0.5m 会糊满半个屏幕
+  const def0 = weaponDef(id) || {};
+  state.vmBaseZ = def0.melee ? -0.44
+    : def0.id === 'longshot' ? -0.72
+      : def0.slot === 2 ? -0.62
+        : def0.id === 'thunder' ? -0.46 : -0.52;
+  if (state.vmSlot !== undefined && state.vmSlot !== slot) state.prevVmSlot = state.vmSlot;
+  state.vmSlot = slot;
   const key = id || 'k9';
   let vm = state.viewmodels[key];
   if (!vm) {
@@ -1215,7 +1309,7 @@ function updateSelf(dt, now) {
   s.weaponMoveMult = def.moveMult || 1;
   if (frame.ads && !s.isZombie && !def.melee && !def.projectile) s.weaponMoveMult *= 0.78;
   if (s.alive && state.map) {
-    movePlayer(s, frame, Math.min(dt, 0.05), state.map.colliders);
+    movePlayer(s, frame, Math.min(dt, 0.05), state.map.colliders, { gravity: state.rules.gravity });
   }
   // 服务器校正量按帧衰减消费：帧率无关（指数衰减），视觉上是一次柔和回拉而非跳变。
   // k=8 为实测最优：把行走时的速度突变从 7.15 m/s 压到 2.15 m/s（降幅约 70%），
@@ -1492,7 +1586,7 @@ function updateViewmodelAnim(s, vm, dt, adsT, active, scoped, frame) {
   // ---- 合成位姿：基础 + 开镜插值 ----
   const baseX = 0.24 + Math.sin(ph * 0.5) * 0.006;
   const baseY = -0.22;
-  const baseZ = -0.5;
+  const baseZ = state.vmBaseZ ?? -0.5;
   let nX = baseX + bobX + state.vmKick * 0.006;
   let nY = baseY + bobY - state.vmKick * 0.04;
   let nZ = baseZ + state.vmKick * 0.12;
@@ -1654,6 +1748,29 @@ function updateCrosshair(dt, frame) {
   el.classList.toggle('low-ammo', !!low);
 }
 
+// Q：切回上一把武器（桌面端最常见的操作习惯）
+function quickSwap() {
+  const prev = state.prevVmSlot;
+  if (prev === undefined || prev < 0 || prev === state.vmSlot) return;
+  if (!weaponIdForSlot(prev)) return;
+  applyLocalSwitch(prev);
+}
+
+// 移动端"雷"键：切到投掷物并立即按一次开火（服务器判定剩余数量）
+function throwGrenadeQuick() {
+  if (!state.self.alive || state.self.isZombie) return;
+  if ((state.self.grenades ?? 0) <= 0) {
+    hud.toast('没有手雷了');
+    sfx.empty();
+    return;
+  }
+  applyLocalSwitch(3);
+  setTimeout(() => {
+    input.fire = true;
+    setTimeout(() => { input.fire = false; }, 90);
+  }, 130);
+}
+
 function fireVisuals(frame) {
   const def = weaponDef(state.selfWeaponId) || {};
   const held = !!frame.fire;
@@ -1717,6 +1834,11 @@ function fireVisuals(frame) {
   }
   const to = { x: from.x + dir2.x * maxT, y: from.y + dir2.y * maxT, z: from.z + dir2.z * maxT };
   effects.tracer(from, to);
+  // 打到实体（不是打到天空）：留弹孔 + 一小片灰尘，让"打在墙上"有落点反馈
+  if (maxT < 118) {
+    effects.decal(to, dir2);
+    if (Math.random() < 0.5) effects.impact(to, 'dust');
+  }
   if (state.viewmodel?.userData.muzzle && !scoped) {
     const muzzleWorld = state.viewmodel.userData.muzzle.getWorldPosition(new THREE.Vector3());
     effects.shell({ x: muzzleWorld.x, y: muzzleWorld.y - 0.05, z: muzzleWorld.z }, { x: -dir.x, y: 0.5, z: -dir.z });
@@ -1749,7 +1871,10 @@ function loop(now) {
   }
   // 触控视角复用同一结果（见 setupTouch 回调），确保开镜降速对触屏同样生效
   input.effectiveSens = input.sensitivity;
-  if (state.wasGrounded === false && state.self.grounded) sfx.land();
+  if (state.wasGrounded === false && state.self.grounded) {
+    sfx.land();
+    effects.impact({ x: state.self.pos.x, y: state.self.pos.y + 0.06, z: state.self.pos.z }, 'dust');
+  }
   if (state.wasGrounded === true && !state.self.grounded) sfx.jump();
   state.wasGrounded = state.self.grounded;
   if (now - state.lastPingAt > 2000) {
@@ -1801,6 +1926,24 @@ function loop(now) {
 }
 
 // ---------------- 聊天 / 指针锁定 ----------------
+// 客户端 Mod 的按键绑定（例如 F8 切换自绘 HUD）
+function bindModKeys() {
+  window.addEventListener('keydown', (e) => {
+    if (!state.inGame || hud.chatOpen) return;
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    for (const m of state.mods || []) {
+      const fn = m.keys && m.keys.get(e.code);
+      if (fn) {
+        try {
+          fn(e);
+        } catch (err) {
+          console.error(`[mod:${m.meta.id}] key handler error`, err);
+        }
+      }
+    }
+  });
+}
+
 function bindChatKey() {
   window.addEventListener('keydown', (e) => {
     if (!state.inGame) return;
@@ -1894,9 +2037,14 @@ function toggleBuy() {
     closeBuy();
     return;
   }
-  // 丧尸不能选枪
+  // 丧尸不能选枪；死斗/军备竞赛没有商店
   if (state.mode === 'zombie' && state.self.isZombie) {
     hud.toast('丧尸不能选枪');
+    sfx.click();
+    return;
+  }
+  if (state.mode === 'tdm' || state.mode === 'gungame') {
+    hud.toast('该模式没有商店，武器随复活/升级自动发放');
     sfx.click();
     return;
   }
@@ -2023,6 +2171,7 @@ function boot() {
   bindSettingsUI();
   wireEvents();
   bindChatKey();
+  bindModKeys();
   bindPointer();
   bindAltFree();
   bindAuthUI();

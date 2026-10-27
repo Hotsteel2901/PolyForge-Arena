@@ -51,6 +51,7 @@ export class Hud {
       hint: $('hint'),
       modsHud: $('mods-hud'),
       skill: $('skill'),
+      ggLadder: $('gg-ladder'),
       dmgNumbers: $('dmg-numbers'),
       dmgDirs: $('dmg-dirs'),
       killConfirm: $('kill-confirm'),
@@ -72,6 +73,8 @@ export class Hud {
     this.team = 1;
     this.primaryId = null;
     this.deathInfo = null;
+    this.ladder = null;
+    this.selfLevel = 0;
     this.bombCarrier = false;
     this.bomb = null;
     this.chatOpen = false;
@@ -104,13 +107,30 @@ export class Hud {
     this.r.statusDot.classList.toggle('ok', ok);
   }
 
-  setMode(mode, label) {
+  setMode(mode, label, opts = {}) {
     this.mode = mode;
+    this.scoreLimit = opts.scoreLimit || 0;
     this.r.modeLabel.textContent = label;
-    // 生化模式也有经济（选枪/买护甲手雷），金钱必须一直可见
-    this.r.money.classList.remove('hidden');
-    this.r.scoreCt.textContent = mode === 'defusal' ? 'CT 0' : '人类 0';
-    this.r.scoreT.textContent = mode === 'defusal' ? 'T 0' : '僵尸 0';
+    // 拆弹/生化有经济；死斗与军备竞赛没有商店，金钱栏隐藏
+    const moneyMode = mode === 'defusal' || mode === 'zombie';
+    this.r.money.classList.toggle('hidden', !moneyMode);
+    if (mode === 'defusal') {
+      this.r.scoreCt.textContent = 'CT 0';
+      this.r.scoreT.textContent = 'T 0';
+    } else if (mode === 'zombie') {
+      this.r.scoreCt.textContent = '人类 0';
+      this.r.scoreT.textContent = '僵尸 0';
+    } else if (mode === 'tdm') {
+      this.r.scoreCt.textContent = 'CT 0';
+      this.r.scoreT.textContent = 'T 0';
+    } else {
+      // 军备竞赛是自由混战：比分栏换成等级提示
+      this.r.scoreCt.textContent = '等级 —';
+      this.r.scoreT.textContent = '目标 匕首';
+    }
+    // 军备竞赛只有一把武器，四格武器槽没有意义
+    this.r.slots.classList.toggle('hidden', mode === 'gungame');
+    this.r.grenadeCount.classList.toggle('hidden', mode === 'gungame');
   }
 
   // 一局结束/重进时清空临时 UI，避免上一局的击杀播报、伤害数字残留
@@ -186,6 +206,7 @@ export class Hud {
     el.classList.add('show');
     clearTimeout(this.killTimer);
     this.killTimer = setTimeout(() => el.classList.remove('show'), 800);
+    this._buzz(20);
   }
 
   setFps(v, host = false) {
@@ -208,12 +229,16 @@ export class Hud {
     this.r.money.textContent = `💰 ${entry.mo ?? 0}`;
     this.team = entry.t;
     this.bombCarrier = !!entry.bc;
-    if (this.mode === 'defusal') {
+    if (this.mode === 'defusal' || this.mode === 'tdm') {
       this.r.teamLabel.textContent = entry.t === 1 ? 'CT（蓝）' : 'T（橙）';
       this.r.teamLabel.style.color = entry.t === 1 ? '#7fd0ff' : '#ffab5e';
-    } else {
+    } else if (this.mode === 'zombie') {
       this.r.teamLabel.textContent = entry.z ? '僵尸' : '人类';
       this.r.teamLabel.style.color = entry.z ? '#ff9b8a' : '#7fd0ff';
+    } else {
+      // 军备竞赛：没有阵营，显示"自由混战"
+      this.r.teamLabel.textContent = '自由混战';
+      this.r.teamLabel.style.color = '#cfd8e3';
     }
     this.r.lowhp.style.opacity = alive && entry.h < 32 ? '1' : '0';
     this.setSlots(entry.w, entry.zb);
@@ -227,6 +252,34 @@ export class Hud {
     } else {
       this.r.skill.classList.add('hidden');
     }
+  }
+
+  // 军备竞赛武器阶梯：一排小格，当前等级高亮，已通过的打勾
+  setLadder(ladder, level = 0) {
+    this.ladder = ladder || null;
+    this.selfLevel = level;
+    const el = this.r.ggLadder;
+    if (!el) return;
+    if (!ladder || !ladder.length) {
+      el.classList.add('hidden');
+      el.innerHTML = '';
+      return;
+    }
+    el.classList.remove('hidden');
+    if (el.children.length !== ladder.length) {
+      el.innerHTML = '';
+      for (const id of ladder) {
+        const chip = document.createElement('span');
+        chip.className = 'gg-chip';
+        chip.textContent = WEAPON_SHORT[id] || weaponName(id);
+        chip.title = weaponName(id);
+        el.appendChild(chip);
+      }
+    }
+    [...el.children].forEach((chip, i) => {
+      chip.classList.toggle('on', i === level);
+      chip.classList.toggle('done', i < level);
+    });
   }
 
   setSlots(activeId, zombie) {
@@ -254,12 +307,16 @@ export class Hud {
     if (!round) return;
     this.r.roundLabel.textContent = `第 ${round.rn} 回合`;
     const scores = round.sc || {};
-    if (this.mode === 'defusal') {
+    if (this.mode === 'defusal' || this.mode === 'tdm') {
       this.r.scoreCt.textContent = `CT ${scores.CT ?? 0}`;
       this.r.scoreT.textContent = `T ${scores.T ?? 0}`;
-    } else {
+    } else if (this.mode === 'zombie') {
       this.r.scoreCt.textContent = `人类 ${scores.HUMAN ?? 0}`;
       this.r.scoreT.textContent = `僵尸 ${scores.ZOMBIE ?? 0}`;
+    } else {
+      const total = (this.ladder && this.ladder.length) || 7;
+      this.r.scoreCt.textContent = `等级 ${this.selfLevel + 1}/${total}`;
+      this.r.scoreT.textContent = '目标 匕首';
     }
     if (round.ph === 'buy') {
       this.r.timer.textContent = `购买 ${round.bu}s`;
@@ -305,6 +362,22 @@ export class Hud {
       } else {
         z.objective.textContent = '在时限内存活！弹药箱 / 回血箱可补给（E）';
       }
+    } else if (this.mode === 'tdm') {
+      if (!round || round.st === 'ended') {
+        z.objective.textContent = '';
+      } else {
+        const sc = round.sc || {};
+        const limit = this.scoreLimit || 60;
+        z.objective.textContent = `团队死斗：先到 ${limit} 杀 · 当前 CT ${sc.CT || 0} : ${sc.T || 0} T`;
+      }
+    } else if (this.mode === 'gungame') {
+      if (!round || round.st === 'ended') {
+        z.objective.textContent = '';
+      } else {
+        const total = (this.ladder && this.ladder.length) || 7;
+        const cur = this.ladder ? (this.ladder[this.selfLevel] || '') : '';
+        z.objective.textContent = `军备竞赛：${weaponName(cur)} · 第 ${this.selfLevel + 1}/${total} 级 · 匕首击杀夺冠`;
+      }
     }
   }
 
@@ -342,16 +415,26 @@ export class Hud {
     this.bannerTimer = setTimeout(() => this.r.banner.classList.remove('show'), 1600);
   }
 
+  // 移动端震动反馈：命中/受击/击杀各给一个不同长度
+  _buzz(ms) {
+    if (!this.haptics) return;
+    if (navigator.vibrate) navigator.vibrate(ms);
+  }
+
   hitmarker(headshot = false) {
     this.r.hitmarker.classList.toggle('hs', headshot);
     this.r.hitmarker.classList.remove('hidden');
     clearTimeout(this.hitTimer);
     this.hitTimer = setTimeout(() => this.r.hitmarker.classList.add('hidden'), 140);
+    this._buzz(headshot ? 14 : 8);
   }
 
+  // 受击红闪：0.8 会整屏发红、连 UI 一起染，压低到 0.5 并加快回落
   damageFlash() {
-    this.r.vignette.style.opacity = '0.8';
-    setTimeout(() => { this.r.vignette.style.opacity = '0'; }, 260);
+    this.r.vignette.style.opacity = '0.5';
+    clearTimeout(this.dmgFlashTimer);
+    this.dmgFlashTimer = setTimeout(() => { this.r.vignette.style.opacity = '0'; }, 190);
+    this._buzz(24);
   }
 
   addChat(name, text, system = false) {
@@ -376,6 +459,8 @@ export class Hud {
     this.chatOnClose = onClose;
     this.r.chatInput.classList.remove('hidden');
     this.r.chatInput.focus();
+    this.chatHistory = this.chatHistory || [];
+    this.chatIndex = this.chatHistory.length;
     // 移动端把输入框移到屏幕顶部，避免被弹出的虚拟键盘遮挡
     const wrap = this.r.chatInput.closest('#chat-wrap');
     if (wrap) {
@@ -399,10 +484,26 @@ export class Hud {
     this.r.chatInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         const text = this.r.chatInput.value.trim();
+        if (text) {
+          this.chatHistory = this.chatHistory || [];
+          this.chatHistory.push(text);
+          if (this.chatHistory.length > 12) this.chatHistory.shift();
+        }
         this.closeChat();
         if (text && this.chatCb) this.chatCb(text);
       } else if (e.key === 'Escape') {
         this.closeChat();
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        // 上下键回溯历史输入（聊天里最常见的习惯）
+        const h = this.chatHistory || [];
+        if (!h.length) return e.stopPropagation();
+        e.preventDefault();
+        if (this.chatIndex === undefined) this.chatIndex = h.length;
+        this.chatIndex += e.key === 'ArrowUp' ? -1 : 1;
+        this.chatIndex = Math.max(0, Math.min(h.length, this.chatIndex));
+        this.r.chatInput.value = this.chatIndex >= h.length ? '' : h[this.chatIndex];
+        const v = this.r.chatInput.value;
+        this.r.chatInput.setSelectionRange(v.length, v.length);
       }
       e.stopPropagation();
     });
@@ -423,7 +524,7 @@ export class Hud {
       name.textContent = p.n + (p.i === selfId ? '（你）' : '');
       name.className = `team-${team}`;
       const t = document.createElement('td');
-      t.textContent = p.zb ? '僵尸' : p.t === 1 ? 'CT/人类' : 'T';
+      t.textContent = this.mode === 'gungame' ? `Lv ${(p.lv ?? 0) + 1}` : p.zb ? '僵尸' : p.t === 1 ? 'CT/人类' : 'T';
       const k = document.createElement('td');
       k.textContent = p.k;
       const d = document.createElement('td');

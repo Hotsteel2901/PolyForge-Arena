@@ -3,6 +3,7 @@ import containment from './containment.js';
 import obsidian from './obsidian.js';
 import foundry from './foundry.js';
 import hive from './hive.js';
+import pit from './pit.js';
 import { generateNav } from './navgen.js';
 
 // 导航图优先用自动生成：多层地图（天桥/楼梯）的手写 nav 极易漏边，
@@ -32,4 +33,5 @@ export const MAPS = {
   obsidian: normalize(obsidian),
   foundry: normalize(foundry),
   hive: normalize(hive),
+  pit: normalize(pit),
 };

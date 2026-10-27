@@ -40,6 +40,7 @@
         <div id="room-code" title="点击复制房间码"></div>
       </div>
       <div id="objective"></div>
+      <div id="gg-ladder" class="hidden"></div>
       <div id="use-progress" class="hidden">
         <div id="use-progress-label">安放炸弹…</div>
         <div id="use-progress-bar"><i></i></div>
@@ -99,6 +100,8 @@
           <select id="mode-select">
             <option value="defusal">拆弹模式（PVP）</option>
             <option value="zombie">生化模式（感染）</option>
+            <option value="tdm">团队死斗（复活战）</option>
+            <option value="gungame">军备竞赛（升级枪械）</option>
           </select>
         </div>
         <div class="menu-row">
@@ -141,6 +144,9 @@
             <p><b>触屏</b>：左侧热区任意点起手 = 摇杆（推满自动疾跑）· 右侧滑动转向 · 右下角按钮为射击/跳/蹲/换弹/开镜 · 顶部条为全屏/计分/聊天/商店/技能</p>
             <p><b>拆弹</b>：T 方拾取炸弹 → 到 A/B 点按住 E 安放 → 40 秒倒计时；CT 方在炸弹旁按住 E 拆除（5 秒）。存活者跨回合保留装备。</p>
             <p><b>生化</b>：人类撑到时间结束，或清空丧尸；被咬到即感染，8 秒后以丧尸重生。最后 60 秒进入「琉璃决战」，全员强化且不再复活。</p>
+            <p><b>团队死斗</b>：满配复活，先到 60 杀的一方获胜，阵亡 3 秒后重生（无需买枪）。</p>
+            <p><b>军备竞赛</b>：自由混战，每击杀一次升级武器（手枪→冲锋枪→步枪→霰弹→机枪→狙击→匕首），用匕首完成最后一次击杀即夺冠。</p>
+            <p><b>快捷键</b>：Q 快速切回上一把武器；B 商店（仅拆弹/生化）；设置里可切「按住/切换」开镜与疾跑。</p>
           </div>
         </details>
         <div class="footer">程序化建模 · 零外部美术资产 · 房主权威 · VibeHub P2P 联机</div>
@@ -159,6 +165,10 @@
         <label>画质 <select id="set-quality"><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label>
         <label>显示 FPS <select id="set-fps"><option value="1">开</option><option value="0">关</option></select></label>
         <label>准星颜色 <input type="color" id="set-crosshair" value="#dcffe6"></label>
+        <label>开镜方式 <select id="set-ads"><option value="hold">按住</option><option value="toggle">切换</option></select></label>
+        <label>疾跑方式 <select id="set-sprint"><option value="hold">按住</option><option value="toggle">切换</option></select></label>
+        <label>移动端按钮大小 <select id="set-btnscale"><option value="0.85">小</option><option value="1">标准</option><option value="1.2">大</option><option value="1.4">特大</option></select></label>
+        <label>命中震动（移动端） <select id="set-haptics"><option value="1">开</option><option value="0">关</option></select></label>
         <button id="settings-close" class="btn primary">返回</button>
       </div>
     </div>

@@ -11,7 +11,10 @@ import { tickBot, createBotBrain } from './bots.js';
 import { loadServerMods } from './mods.js';
 import { DefusalRound } from './modes/defusal-core.js';
 import { ZombieMatch } from './modes/zombie-core.js';
+import { TdmRound } from './modes/tdm-core.js';
+import { GunGameRound } from './modes/gungame-core.js';
 import { directionFromAngles } from '../shared/math.js';
+import { modeCfg } from '../shared/modes.js';
 
 const BOT_NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliet'];
 
@@ -24,6 +27,14 @@ export class Room {
   constructor({ id, mode, mapId, maxPlayers = 12, botCount = 8, botSkill = 1, config = {} }) {
     this.id = id;
     this.mode = mode;
+    this.modeCfg = modeCfg(mode);
+    // 规则表：Mod 可改写（重力倍率、友伤、复活时间…），默认值来自模式定义
+    this.rules = {
+      gravity: 1,
+      friendlyFire: false,
+      respawnDelay: this.modeCfg.respawnDelay ?? 3,
+      damageMult: 1,
+    };
     this.mapId = mapId;
     this.map = MAPS[mapId];
     this.maxPlayers = maxPlayers;
@@ -55,9 +66,15 @@ export class Room {
     this.buyUntil = 0;
     this.roundEndAt = 0;
     this.matchEndAt = 0;
-    this.rotation = mode === 'defusal' ? ['vertex', 'obsidian', 'foundry'] : ['containment', 'hive', 'obsidian'];
+    this.rotation = {
+      defusal: ['vertex', 'obsidian', 'foundry'],
+      zombie: ['containment', 'hive', 'obsidian'],
+      tdm: ['pit', 'foundry', 'vertex'],
+      gungame: ['pit', 'vertex', 'foundry'],
+    }[mode] || ['vertex', 'obsidian'];
     this.rotationIdx = 0;
     this.modResults = { loaded: [], errors: [] };
+    this.commands = new Map(); // 聊天命令（Mod 注册，如 !grav 0.4）
     this.log = (...args) => console.log(`[room:${id}]`, ...args);
     this.nextBotId = 1;
   }
@@ -135,22 +152,47 @@ export class Room {
     this.broadcast({ type: S2C.CHAT, name: 'SYSTEM', text, system: true });
   }
 
+  // ---------- 规则 / 命令 ----------
+  // 规则热更新：改完立即广播，客户端本地预测与服务端保持同一套参数
+  setRule(key, value) {
+    if (!key) return;
+    if (value === undefined || value === null) delete this.rules[key];
+    else this.rules[key] = value;
+    this.broadcast({ type: 'rules', rules: { ...this.rules } });
+    this.say(`规则更新：${key} = ${value}`);
+    this.log(`rule ${key} = ${value}`);
+  }
+
+  registerCommand(name, fn) {
+    if (typeof fn === 'function') this.commands.set(String(name).toLowerCase(), fn);
+  }
+
+  // 聊天命令：以 ! 开头，命中已注册命令时不再广播给所有人。
+  tryCommand(p, text) {
+    if (typeof text !== 'string' || text[0] !== '!') return false;
+    const parts = text.slice(1).trim().split(/\s+/);
+    const name = (parts.shift() || '').toLowerCase();
+    const fn = this.commands.get(name);
+    if (!fn) return false;
+    try {
+      fn(p, parts, this);
+    } catch (err) {
+      this.log(`command ${name} error: ${err.message}`);
+      this.sendTo(p.id, { type: 'chat', name: 'SYSTEM', text: `命令执行失败：${err.message}`, system: true });
+    }
+    return true;
+  }
+
   // ---------- 玩家管理 ----------
   addPlayer(name, teamPref = 'random') {
     if (this.humans() >= this.maxPlayers) return null;
     const id = `h${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
     const p = createPlayer(id, name);
     p.teamPref = teamPref === 'ct' || teamPref === 't' ? teamPref : 'random';
-    if (this.mode === MODE.DEFUSAL) {
-      // 加入时立即分配阵营（偏好优先，随机则补弱），购买阶段即可见
-      if (p.teamPref === 't') p.team = TEAM.T;
-      else if (p.teamPref === 'ct') p.team = TEAM.CT;
-      else {
-        const ct = [...this.players.values()].filter((x) => x.team === TEAM.CT).length;
-        const t = [...this.players.values()].filter((x) => x.team === TEAM.T).length;
-        p.team = ct <= t ? TEAM.CT : TEAM.T;
-      }
-    }
+    p.ggLadder = this.modeCfg.ladder || null;
+    p.ggLevel = 0;
+    // 分队：拆弹/死斗按偏好 + 人数补齐；军备竞赛交替分色（只是外观，实际自由混战）
+    if (this.mode !== MODE.ZOMBIE) this.assignTeam(p);
     this.players.set(id, p);
     // 若房间满员，挤掉最后一个 bot
     if (this.players.size > this.maxPlayers) {
@@ -161,19 +203,55 @@ export class Room {
     return p;
   }
 
+  // 分队：拆弹/死斗按偏好并补弱侧；军备竞赛交替分色（队伍只用于外观，实际自由混战）
+  assignTeam(p, reset = false) {
+    if (this.mode === MODE.GUNGAME) {
+      this.ggFlip = !this.ggFlip;
+      p.team = this.ggFlip ? TEAM.CT : TEAM.T;
+      return p.team;
+    }
+    if (this.mode === MODE.ZOMBIE) return p.team;
+    if (p.teamPref === 't') p.team = TEAM.T;
+    else if (p.teamPref === 'ct') p.team = TEAM.CT;
+    else {
+      const ct = [...this.players.values()].filter((x) => x.team === TEAM.CT).length;
+      const t = [...this.players.values()].filter((x) => x.team === TEAM.T).length;
+      p.team = ct <= t ? TEAM.CT : TEAM.T;
+    }
+    return p.team;
+  }
+
+  // 军备竞赛升级：击杀 +1 级，换装并通知客户端；到顶（匕首）再击杀即夺冠
+  advanceGunGame(killer, victim) {
+    const core = this.core;
+    if (!core || core.state !== 'live') return;
+    const ladder = this.modeCfg.ladder || [];
+    const maxLevel = Math.max(0, ladder.length - 1);
+    // 用最高级武器（匕首）完成击杀 → 夺冠
+    if ((killer.ggLevel || 0) >= maxLevel) {
+      this.broadcast({ type: 'gg_win', id: killer.id, name: killer.name });
+      core.end(killer.id, killer.name, 'knife');
+      return;
+    }
+    killer.ggLevel = Math.min(maxLevel, (killer.ggLevel || 0) + 1);
+    giveLoadout(killer, this.mode, killer.team, this.weapons);
+    killer.switchSeq += 1;
+    this.sendTo(killer.id, {
+      type: 'switch',
+      w: killer.weapons.get(killer.activeSlot)?.def.id,
+      slot: killer.activeSlot,
+      seq: killer.switchSeq,
+    });
+    this.broadcast({ type: 'gg_level', id: killer.id, name: killer.name, level: killer.ggLevel, weapon: killer.weapons.get(killer.activeSlot)?.def.id });
+  }
+
   spawnJoiner(p) {
     if (!this.core) return; // 开局购买阶段：队伍已在加入时分配
     if (this.core.state === 'ended') return;
     if (p.alive) return; // 已在本回合出生（如开局加入）则不动，避免清掉炸弹携带者
-    if (this.mode === MODE.DEFUSAL) {
+    if (this.mode === MODE.DEFUSAL || this.mode === MODE.TDM || this.mode === MODE.GUNGAME) {
       p.isZombie = false;
-      if (p.teamPref === 't') p.team = TEAM.T;
-      else if (p.teamPref === 'ct') p.team = TEAM.CT;
-      else {
-        const ct = [...this.players.values()].filter((x) => x.team === TEAM.CT).length;
-        const t = [...this.players.values()].filter((x) => x.team === TEAM.T).length;
-        p.team = ct <= t ? TEAM.CT : TEAM.T;
-      }
+      if (this.mode !== MODE.GUNGAME) this.assignTeam(p);
       const spot = this.pickSpawn(p.team === TEAM.CT ? 'CT' : 'T');
       spawnPlayer(this, p, p.team, spot);
     } else {
@@ -208,6 +286,9 @@ export class Room {
     while (have < want) {
       const bot = createPlayer(`b${this.nextBotId++}`, `Bot-${BOT_NAMES[have % BOT_NAMES.length]}`, { isBot: true });
       bot.botBrain = createBotBrain();
+      bot.ggLadder = this.modeCfg.ladder || null;
+      bot.ggLevel = 0;
+      if (this.mode !== MODE.ZOMBIE) this.assignTeam(bot);
       this.players.set(bot.id, bot);
       have++;
     }
@@ -233,6 +314,11 @@ export class Room {
       p.isCrystalHunter = false;
       p.isZombieKing = false;
       p.isZombieServant = false;
+    }
+
+    if (this.mode === MODE.TDM || this.mode === MODE.GUNGAME) {
+      this.startContinuousRound();
+      return;
     }
 
     if (this.mode === MODE.DEFUSAL) {
@@ -308,6 +394,50 @@ export class Room {
     }
   }
 
+  // 持续型模式（团队死斗 / 军备竞赛）：一次部署打完整局，靠分数或时间决出胜负
+  startContinuousRound() {
+    const cfg = this.modeCfg;
+    const all = [...this.players.values()];
+    for (const p of all) {
+      p.isZombie = false;
+      this.assignTeam(p, true);
+      p.ggLadder = cfg.ladder || null;
+      if (this.mode === MODE.GUNGAME) p.ggLevel = 0;
+      p.kills = 0;
+      p.deaths = 0;
+      p.score = 0;
+      p.money = 0;
+      p.boughtItems = [];
+      p.bombCarrier = false;
+    }
+    this.spawnAll();
+    if (this.mode === MODE.TDM) {
+      this.core = new TdmRound({
+        scoreLimit: cfg.scoreLimit,
+        duration: cfg.roundTime,
+        onEvent: (e) => this.handleRoundEvent(e),
+      });
+      this.core.start();
+      this.say(`团队死斗开始：先到 ${cfg.scoreLimit} 杀的一方获胜`);
+    } else {
+      this.core = new GunGameRound({
+        duration: cfg.roundTime,
+        ladder: cfg.ladder,
+        onEvent: (e) => this.handleRoundEvent(e),
+      });
+      this.core.start();
+      this.broadcast({ type: 'gg_start', ladder: cfg.ladder, duration: cfg.roundTime });
+      this.say('军备竞赛开始：每次击杀升级武器，用匕首完成最后击杀夺冠');
+    }
+  }
+
+  // 持续模式复活：保留等级（军备竞赛）与队伍，重新出生
+  respawnContinuous(p) {
+    const key = p.team === TEAM.CT ? 'CT' : 'T';
+    const spot = this.pickSpawn(key);
+    spawnPlayer(this, p, p.team, spot, { protect: 1.2 });
+  }
+
   // 实体炸弹放在 T 出生点前方（未激活），方便 T 方开局拾取
   placeBombAtSpawn() {
     const tSpawns = this.map.spawns.T || this.map.spawns['T'] || [{ x: 0, z: 0, yaw: 0 }];
@@ -371,39 +501,61 @@ export class Room {
       this.broadcast({ type: 'round_start', mode: this.mode, round: this.roundNum, ...e });
     } else if (e.type === 'round_end') {
       const winner = e.winner;
-      // 先累计本回合比分（两模式共用）
-      if (this.mode === MODE.DEFUSAL) {
-        this.matchScore[winner] += 1;
-        for (const p of this.players.values()) {
-          const won = p.team === winner;
-          p.money = Math.min(MONEY_CAP, p.money + (won ? WIN_REWARD : LOSS_REWARD));
-        }
+      const continuous = !this.modeCfg.rounds;
+      const score = this.matchScore;
+      // 军备竞赛的分数不是队伍分：把"等级"作为比分展示没有意义，这里只记局数
+      if (this.mode === MODE.TDM) {
+        if (this.matchScore[winner] !== undefined) this.matchScore[winner] += 1;
+      } else if (this.mode === MODE.GUNGAME) {
+        // 自由混战没有队伍分：胜负只看个人等级，见 snapshot 的 lv 字段
       } else if (winner === 'DRAW') {
         this.matchScore.HUMAN += 1;
         this.matchScore.ZOMBIE += 1;
       } else if (this.matchScore[winner] !== undefined) {
         this.matchScore[winner] += 1;
       }
-      // 生化：人类与僵尸是同一枚硬币的两面，每回合双方都记 1 分，
-      // 这样 sc.HUMAN + sc.ZOMBIE 恒等于已结束回合数（与实际回合数一致）；
-      // 拆弹：按阵营计分，先到 ROUNDS_TO_WIN_ROUNDS 分者赢下整场。
-      const score = this.matchScore;
+      if (this.mode === MODE.DEFUSAL) {
+        for (const p of this.players.values()) {
+          const won = p.team === winner;
+          p.money = Math.min(MONEY_CAP, p.money + (won ? WIN_REWARD : LOSS_REWARD));
+        }
+      }
+      // 生化：每回合双方各记 1 分；拆弹：先到 8 分赢下整场；
+      // 死斗/军备：单局即整场，round_end 直接等于 match_end。
       const isDraw = winner === 'DRAW';
-      const matchWinner = isDraw
-        ? null
-        : this.mode === MODE.DEFUSAL
-          ? (score[winner] >= ROUNDS_TO_WIN ? winner : null)
-          : (score[winner] >= ROUNDS_TO_WIN && score[winner] > score[winner === 'HUMAN' ? 'ZOMBIE' : 'HUMAN'] ? winner : null);
-      const nextRoundIn = matchWinner ? 5 : 10;
+      const matchWinner = continuous
+        ? (isDraw ? 'DRAW' : winner)
+        : isDraw
+          ? null
+          : this.mode === MODE.DEFUSAL
+            ? (score[winner] >= ROUNDS_TO_WIN ? winner : null)
+            : (score[winner] >= ROUNDS_TO_WIN && score[winner] > score[winner === 'HUMAN' ? 'ZOMBIE' : 'HUMAN'] ? winner : null);
+      const nextRoundIn = continuous ? 8 : (matchWinner ? 5 : 10);
       if (this.mode === MODE.DEFUSAL) {
         this.phase = matchWinner ? 'over' : 'buy';
         this.buyUntil = matchWinner ? 0 : this.time + nextRoundIn;
       }
-      this.roundEndAt = this.time + nextRoundIn;
-      this.broadcast({ type: 'round_end', winner, reason: e.reason, round: this.roundNum, scores: score, matchWinner, nextRoundIn });
+      if (continuous) {
+        this.phase = 'over';
+        this.roundEndAt = 0;
+      } else {
+        this.roundEndAt = this.time + nextRoundIn;
+      }
+      this.broadcast({
+        type: 'round_end',
+        winner,
+        reason: e.reason,
+        round: this.roundNum,
+        scores: score,
+        matchWinner,
+        nextRoundIn,
+        winnerId: e.winnerId,
+        winnerName: e.winnerName,
+        scoreLimit: this.modeCfg.scoreLimit,
+      });
       if (matchWinner) {
         this.matchEndAt = this.time + 8;
-        this.broadcast({ type: 'match_end', winner: matchWinner, scores: score });
+        this.broadcast({ type: 'match_end', winner: matchWinner, scores: score, winnerId: e.winnerId, winnerName: e.winnerName });
       }
     } else if (e.type === 'bomb_planted') {
       this.bomb.planted = true;
@@ -538,8 +690,9 @@ export class Room {
 
     for (const p of this.players.values()) {
       if (!p.alive) {
-        if (p.respawnAt && this.time >= p.respawnAt && this.mode === MODE.ZOMBIE && !this.noRespawn) {
-          respawnZombie(this, p);
+        if (p.respawnAt && this.time >= p.respawnAt && !this.noRespawn) {
+          if (this.mode === MODE.ZOMBIE) respawnZombie(this, p);
+          else if (this.mode === MODE.TDM || this.mode === MODE.GUNGAME) this.respawnContinuous(p);
         }
         continue;
       }
@@ -553,7 +706,7 @@ export class Room {
         p.inputAt = this.time;
       }
       this.processInput(p);
-      movePlayer(p, p.input, dt, this.map.colliders);
+      movePlayer(p, p.input, dt, this.map.colliders, { gravity: this.rules.gravity });
       if (p.history) {
         p.history.push(this.time, {
           pos: { ...p.pos },
@@ -574,6 +727,13 @@ export class Room {
 
     this.updateProjectiles(dt);
     this.core?.update(dt);
+    // 军备竞赛到点：等级最高者（并列比击杀）夺冠
+    if (this.mode === MODE.GUNGAME && this.core?.state === 'live' && this.core.timeLeft <= 0) {
+      const ranked = [...this.players.values()].sort((a, b) =>
+        ((b.ggLevel || 0) - (a.ggLevel || 0)) || (b.kills - a.kills) || (b.score - a.score));
+      const best = ranked[0];
+      this.core.end(best ? best.id : null, best ? best.name : null, 'timeout');
+    }
     this.updateAmmoBoxes(dt);
     if (this.phase === 'buy' && this.mode === MODE.DEFUSAL) {
       for (const bot of this.players.values()) {
@@ -1115,6 +1275,10 @@ export class Room {
         bo: p.boostUntil && this.time < p.boostUntil ? 1 : 0,
         // 复活倒计时（秒）：-1 表示本回合不再复活（拆弹阵亡 / 决战阵亡）
         ra: p.alive ? 0 : (p.respawnAt ? Math.max(0, Math.ceil(p.respawnAt - this.time)) : -1),
+        // 出生保护（1=无敌中）：客户端可以据此提示/描边
+        sp: p.spawnProtectUntil && this.time < p.spawnProtectUntil ? 1 : 0,
+        // 军备竞赛等级（0 起）；其他模式恒为 0
+        lv: p.ggLevel || 0,
       });
     }
     const r = {
@@ -1122,7 +1286,8 @@ export class Room {
       rn: this.roundNum,
       tl: Math.max(0, Math.ceil(this.core?.timeLeft ?? 0)),
       bl: Math.max(0, Math.ceil(this.bomb.timeLeft ?? 0)),
-      sc: this.matchScore,
+      sc: this.mode === MODE.TDM ? (this.core?.scores || this.matchScore) : this.matchScore,
+      sl: this.modeCfg.scoreLimit || 0,
       ph: this.phase,
       bu: Math.max(0, Math.ceil(this.buyUntil - this.time)),
     };

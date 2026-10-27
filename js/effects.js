@@ -146,6 +146,51 @@ export class Effects {
     this._add(mesh, 0.12, { fade: true, userData: { opacity: 0.85 } });
   }
 
+  // 弹孔贴花：贴合命中面（用入射方向当法线），共享几何/材质，靠对象池自然回收
+  decal(pos, dir = { x: 0, y: 0, z: 1 }) {
+    if (!this._decalGeo) {
+      this._decalGeo = new THREE.PlaneGeometry(0.17, 0.17);
+      const c = document.createElement('canvas');
+      c.width = 32;
+      c.height = 32;
+      const ctx = c.getContext('2d');
+      const grd = ctx.createRadialGradient(16, 16, 1, 16, 16, 15);
+      grd.addColorStop(0, 'rgba(8,8,8,0.95)');
+      grd.addColorStop(0.45, 'rgba(20,18,16,0.65)');
+      grd.addColorStop(1, 'rgba(20,18,16,0)');
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, 32, 32);
+      this._decalTex = new THREE.CanvasTexture(c);
+      this._decalMat = new THREE.MeshBasicMaterial({
+        map: this._decalTex,
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -3,
+      });
+    }
+    const m = new THREE.Mesh(this._decalGeo, this._decalMat);
+    m.position.set(pos.x, pos.y, pos.z);
+    m.lookAt(pos.x + dir.x, pos.y + dir.y, pos.z + dir.z);
+    m.rotateZ(Math.random() * Math.PI * 2);
+    this._add(m, 26, {});
+  }
+
+  // 换弹时掉落的弹匣：短促下落 + 旋转，比"枪身抖一下"更能说明在换弹
+  magDrop(pos) {
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, 0.14, 0.08),
+      new THREE.MeshStandardMaterial({ color: 0x2f343a, metalness: 0.4, roughness: 0.5 })
+    );
+    m.position.set(pos.x, pos.y, pos.z);
+    this._add(m, 1.1, {
+      vel: { x: 0.7, y: -0.6, z: 0.15 },
+      grav: true,
+      spin: 5 + Math.random() * 4,
+    });
+  }
+
   tracer(from, to, color = 0xa8d8ff) {
     const geo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(from.x, from.y, from.z),

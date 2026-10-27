@@ -16,11 +16,15 @@ export const TEAM = Object.freeze({
 export const MODE = Object.freeze({
   DEFUSAL: 'defusal',
   ZOMBIE: 'zombie',
+  TDM: 'tdm',
+  GUNGAME: 'gungame',
 });
 
 export const MODE_LABEL = Object.freeze({
   defusal: '拆弹模式',
   zombie: '生化模式',
+  tdm: '团队死斗',
+  gungame: '军备竞赛',
 });
 
 // 客户端 → 服务器

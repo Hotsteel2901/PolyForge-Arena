@@ -1,7 +1,7 @@
 // 客户端 Mod 加载（浏览器版）：读取 mods/manifest.json 清单，用相对路径动态 import
 // mods/client/<id>/mod.js。原 /api/mods 接口被静态清单取代。
 
-export async function loadClientMods({ net, hud, state }) {
+export async function loadClientMods({ net, hud, state, settings = null }) {
   const loaded = [];
   let list = { client: [] };
   try {
@@ -11,16 +11,31 @@ export async function loadClientMods({ net, hud, state }) {
   } catch {
     return loaded;
   }
+  const forceAll = new URLSearchParams(location.search).get('mods') === 'all';
   for (const meta of list.client || []) {
+    if (meta.enabled === false && !forceAll) continue;
     try {
       const mod = (await import(`../mods/client/${meta.id}/mod.js?v=${Date.now()}-${meta.id}`)).default;
       if (!mod || typeof mod.init !== 'function') continue;
       const listeners = new Map();
+      const keys = new Map();
       const ctx = {
         id: meta.id,
         name: meta.name,
         version: meta.version,
         state: {},
+        // 只读的游戏状态引用（selfId/mode/players…），便于 HUD 类 Mod 取数
+        game: state,
+        settings,
+        // 按键绑定：code 形如 'KeyG'，回调收到原始 KeyboardEvent
+        onKey(code, fn) {
+          if (typeof fn === 'function') keys.set(code, fn);
+          return () => keys.delete(code);
+        },
+        // 与服务端 ctx 对齐的规则只读视图
+        get rules() {
+          return state.rules || {};
+        },
         log(...args) {
           console.log(`[mod:${meta.id}]`, ...args);
         },
@@ -46,11 +61,20 @@ export async function loadClientMods({ net, hud, state }) {
           setCrosshair(html) {
             hud.setCrosshair(html);
           },
+          toast(text) {
+            hud.toast(text);
+          },
+          banner(title, sub) {
+            hud.banner(title, sub);
+          },
+          damageNumber(dmg, headshot) {
+            hud.damageNumber(dmg, headshot);
+          },
         },
       };
       await mod.init(ctx);
       ctx.state.selfId = state?.selfId;
-      loaded.push({ meta, ctx, listeners });
+      loaded.push({ meta, ctx, listeners, keys });
     } catch (err) {
       console.error(`[client mod ${meta?.id}] load error:`, err);
     }

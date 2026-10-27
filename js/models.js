@@ -317,17 +317,69 @@ export function buildViewmodel(id) {
     default:
       add(g, B(0.08, 0.12, 0.3), dark, 0, 0, 0);
   }
+  addHands(g, id);
   g.add(muzzle);
   // 第一人称模型不参与阴影：它离相机只有 0.5m，而阴影贴图覆盖整张地图（2048 覆盖 100m，
   // 每 texel 约 5cm），自阴影 acne 会把整把枪压成一块纯黑剪影。
+  // 第一人称材质微调：金属件压低 metalness + 给一点自发光。
+  // 枪身与相机只隔 0.4m，场景光的入射角几乎全是掠射，纯 PBR 金属会整块发黑；
+  // 少量自发光（基础色的 30%）保证任何光照下都能看清结构与手部。
+  const remap = new Map();
   g.traverse((o) => {
-    if (o.isMesh) {
-      o.castShadow = false;
-      o.receiveShadow = false;
+    if (!o.isMesh) return;
+    o.castShadow = false;
+    o.receiveShadow = false;
+    let m = remap.get(o.material);
+    if (!m) {
+      m = o.material.clone();
+      if (m.emissive) {
+        m.emissive = new THREE.Color(m.color).multiplyScalar(0.3);
+        m.emissiveIntensity = 1;
+      }
+      if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3);
+      if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.45);
+      m.needsUpdate = true;
+      remap.set(o.material, m);
     }
+    o.material = m;
   });
   g.userData.muzzle = muzzle;
   return g;
+}
+
+// 第一人称手部：只做"握把 + 前护木"两只手 + 一段袖口。
+// 没有手的枪看起来像"浮在空中的模型"，这是第一人称最容易出戏的地方。
+const HAND_POS = {
+  k9: { grip: [0.005, -0.11, 0.06], fore: [-0.045, -0.095, 0.03] },
+  vx9: { grip: [0, -0.115, 0.13], fore: [-0.02, -0.07, -0.09] },
+  arc17: { grip: [0, -0.12, 0.10], fore: [-0.02, -0.05, -0.15] },
+  warden: { grip: [0, -0.12, 0.10], fore: [-0.02, -0.04, -0.21] },
+  longshot: { grip: [0, -0.12, 0.12], fore: [-0.02, -0.06, -0.16] },
+  bruiser: { grip: [0, -0.12, 0.10], fore: [-0.02, -0.05, -0.12] },
+  cryo_gun: { grip: [0, -0.11, 0.11], fore: [-0.02, -0.06, -0.14] },
+  railgun: { grip: [0, -0.12, 0.12], fore: [-0.02, -0.06, -0.18] },
+  energy_rifle: { grip: [0, -0.12, 0.10], fore: [-0.02, -0.06, -0.14] },
+  fang: { grip: [0, 0.0, 0.07] },
+  zclaw: { grip: [0, 0.0, 0.08] },
+  thunder: { grip: [0, -0.02, -0.06] },
+};
+
+export function addHands(g, id) {
+  const pos = HAND_POS[id] || { grip: [0, -0.12, 0.1], fore: null };
+  const skin = mat(0xd8a06a, { roughness: 0.85 });
+  const glove = mat(0x39423a, { roughness: 0.9 });
+
+  // 只做"握在护木/握把上的手"，不做前臂：第一人称里手臂离相机只有 0.4m，
+  // 任何袖口状的大块都会被透视放大成挡住半个屏幕的电线杆，反而更假。
+  const [gx, gy, gz] = pos.grip;
+  add(g, B(0.062, 0.072, 0.088), glove, gx, gy + 0.004, gz, 0.15);
+  add(g, B(0.048, 0.044, 0.05), skin, gx - 0.03, gy + 0.03, gz - 0.01);
+  add(g, B(0.02, 0.05, 0.055), skin, gx + 0.032, gy + 0.02, gz - 0.02, 0, 0, -0.2);
+  if (pos.fore) {
+    const [fx, fy, fz] = pos.fore;
+    add(g, B(0.06, 0.058, 0.08), glove, fx, fy, fz, 0.1);
+    add(g, B(0.046, 0.042, 0.05), skin, fx + 0.03, fy + 0.026, fz + 0.012);
+  }
 }
 
 // ---------------- 道具 ----------------

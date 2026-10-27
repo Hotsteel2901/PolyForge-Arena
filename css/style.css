@@ -37,6 +37,10 @@ body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; col
 #room-code { color: #8fb3a0; font-size: 12px; cursor: pointer; user-select: text; border-bottom: 1px dashed rgba(143,179,160,.5); padding-bottom: 1px; }
 #room-code:hover { color: #9fe6b6; border-color: #57c87e; }
 #objective { position: absolute; top: 76px; left: 50%; transform: translateX(-50%); background: rgba(10,20,14,.7); padding: 6px 16px; border-radius: 6px; font-size: 14px; color: #ffe08a; }
+#gg-ladder { position: absolute; top: 112px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; align-items: center; background: rgba(8,14,10,.55); padding: 5px 10px; border-radius: 20px; }
+.gg-chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; color: #7f9b8b; border: 1px solid rgba(120,170,140,.25); background: rgba(10,24,16,.6); }
+.gg-chip.done { color: #6f8f7d; text-decoration: line-through; opacity: .65; }
+.gg-chip.on { color: #06210f; background: linear-gradient(90deg, #7be8a2, #b8ffcf); border-color: #9fe6b6; font-weight: 700; }
 #killfeed { position: absolute; top: 84px; right: 14px; width: 260px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
 .kf { background: rgba(8,14,10,.68); padding: 3px 10px; border-radius: 4px; font-size: 13px; animation: kf-in .18s; }
 .kf b.killer { color: #7fd0ff; } .kf b.victim { color: #ff9b8a; } .kf b.sys { color: #ffd35e; }
@@ -202,21 +206,25 @@ body {
   position: absolute;
   right: max(12px, env(safe-area-inset-right));
   bottom: max(26px, calc(env(safe-area-inset-bottom) + 10px));
-  width: 290px; height: 202px; pointer-events: none;
+  width: 260px; height: 196px; pointer-events: none;
+  transform: scale(var(--btn-scale, 1));
+  transform-origin: bottom right;
 }
 .touch-btn { display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 2px solid rgba(255,255,255,.55); color: #fff; font-size: 12px; text-shadow: 0 1px 3px #000; background: rgba(20,40,28,.55); }
 .btn-label { pointer-events: none; }
 /* 核心层（半径 <170px）：射击 / 跳 / 蹲 / 换弹 / 开镜 */
-#fire-btn { width: 76px; height: 120px; border-radius: 38px; background: rgba(220,60,60,.5); border-color: rgba(255,120,120,.8); right: 0; bottom: 0; font-size: 16px; }
-#jump-btn { width: 60px; height: 60px; background: rgba(80,160,110,.45); right: 90px; bottom: 0; }
-#crouch-btn { width: 56px; height: 56px; background: rgba(150,110,60,.5); right: 160px; bottom: 0; }
-#reload-btn { width: 56px; height: 56px; background: rgba(150,110,60,.5); right: 0; bottom: 140px; }
-#ads-btn { width: 56px; height: 56px; background: rgba(80,120,180,.5); right: 90px; bottom: 140px; }
-/* 次核心层（170–230px）：互动 / 切枪。
- * 切枪从 right:226/bottom:140 内收到 186/80 —— 原位置距右下角 244px，
- * 已超出横屏拇指舒适半径（390 高时约 176px），内收后降到 192px。 */
-#use-btn { width: 56px; height: 56px; background: rgba(230,190,80,.5); right: 160px; bottom: 140px; }
-#switch-btn { width: 56px; height: 56px; background: rgba(90,150,190,.5); right: 186px; bottom: 80px; }
+/* 拇指弧线布局（从右下角向外）：
+ *   fire 0/0 ｜ jump 84/0 ｜ crouch 146/0 ｜ grenade 84/62 ｜ reload 0/120 ｜ ads 64/120 ｜ use 128/120 ｜ switch 190/60
+ * 任意按钮之间保证 ≥4px 间隙；最远的切枪距角 232px（≈横屏舒适上限），
+ * 新增的"雷"放在拇指正上方（84/62），单手就能摸到。 */
+#fire-btn { width: 76px; height: 112px; border-radius: 38px; background: rgba(220,60,60,.5); border-color: rgba(255,120,120,.8); right: 0; bottom: 0; font-size: 16px; }
+#jump-btn { width: 58px; height: 58px; background: rgba(80,160,110,.45); right: 84px; bottom: 0; }
+#crouch-btn { width: 54px; height: 54px; background: rgba(150,110,60,.5); right: 146px; bottom: 0; }
+#grenade-btn { width: 54px; height: 54px; background: rgba(210,140,60,.55); right: 84px; bottom: 62px; }
+#reload-btn { width: 54px; height: 54px; background: rgba(150,110,60,.5); right: 0; bottom: 120px; }
+#ads-btn { width: 54px; height: 54px; background: rgba(80,120,180,.5); right: 64px; bottom: 120px; }
+#use-btn { width: 54px; height: 54px; background: rgba(230,190,80,.5); right: 128px; bottom: 120px; }
+#switch-btn { width: 52px; height: 52px; background: rgba(90,150,190,.5); right: 190px; bottom: 60px; }
 /* 切换态高亮：开镜 / 蹲下 是 toggle，按下后需保持可见状态 */
 .touch-btn.pressed { transform: scale(0.9); filter: brightness(1.45); }
 .touch-btn.active {
@@ -284,8 +292,8 @@ body {
   }
   #joy-knob { width: 44px; height: 44px; }
   #btn-cluster {
-    width: 290px; height: 202px;
-    transform: scale(0.7);
+    width: 260px; height: 196px;
+    transform: scale(calc(var(--btn-scale, 1) * 0.7));
     transform-origin: bottom right;
   }
   #touch-topbar { transform: scale(0.85); transform-origin: top right; }
@@ -315,9 +323,24 @@ body {
   #dead-msg { font-size: 20px; }
 }
 
+/* 横屏且不高的设备：顶部操作条必须横排，否则竖排 4 个按钮会压住右上角击杀播报 */
+@media (orientation: landscape) and (max-height: 620px) {
+  #touch-topbar {
+    flex-direction: row;
+    top: max(52px, calc(env(safe-area-inset-top) + 44px));
+    right: max(8px, env(safe-area-inset-right));
+    transform: scale(0.78); transform-origin: top right;
+  }
+  #touch-ui .top-btn { width: 46px; height: 46px; font-size: 10px; }
+  /* 击杀播报让开顶栏（54~88）与武器槽（124~158），落在两者下方 */
+  /* 横屏 390 高的可用竖向空间只有 158~233 这一段，播报最多放 3 条，超出裁掉最旧的 */
+  #hud #killfeed { top: 162px; width: 168px; max-height: 72px; overflow: hidden; }
+  #hud #killfeed .kf { font-size: 11px; padding: 1px 6px; }
+}
+
 /* 矮屏（横屏手机）：缩小触控区与 HUD，避免左右重叠 */
 @media (max-height: 500px) {
-  #btn-cluster { transform: scale(0.8); transform-origin: bottom right; }
+  #btn-cluster { transform: scale(calc(var(--btn-scale, 1) * 0.8)); transform-origin: bottom right; }
   /* 摇杆底座由 JS translate 定位，不能再挂 transform: scale()（会覆盖 JS 的位移）。
    * 改用待机圈尺寸 + knob 尺寸来控制矮屏占位。 */
   #joy-zone.active #joy-base { width: 104px; height: 104px; }
@@ -325,7 +348,7 @@ body {
   #bottom-left { bottom: 156px; left: 14px; }
   #bottom-right { bottom: 232px; right: 14px; }
   #chat-wrap { bottom: 280px; }
-  #killfeed { top: 62px; }
+  #hud #killfeed { top: 162px; width: 168px; max-height: 72px; overflow: hidden; }
   /* 矮屏下顶部操作条改横排。必须避开 #pause-btn（top:8 right:8, 40x40），
    * 否则暂停按钮会盖住整排低频键 —— 故整体下移到暂停按钮下方。 */
   #touch-topbar {
@@ -398,3 +421,20 @@ body {
 
 /* 设置里的取色器 */
 .panel input[type=color] { width: 100%; height: 30px; padding: 0; border: 1px solid #2d4a39; border-radius: 6px; background: #0d1a12; }
+
+/* ---------- 客户端 Mod 面板 ---------- */
+.mod-panel {
+  min-width: 132px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(8, 16, 12, .68);
+  border: 1px solid rgba(120, 200, 160, .28);
+  color: #d6e9dd;
+  font-size: 12px;
+  backdrop-filter: blur(4px);
+}
+.mod-panel.mod-hidden { display: none; }
+.mod-panel .mp-title { color: #9fe6b6; font-weight: 700; font-size: 11px; margin-bottom: 4px; letter-spacing: 1px; }
+.mod-panel .mp-row { display: flex; justify-content: space-between; gap: 12px; line-height: 1.6; }
+.mod-panel .mp-row b { color: #ffe08a; font-variant-numeric: tabular-nums; }
+.mod-panel .mp-hint { margin-top: 4px; color: #6f8f7d; font-size: 10px; }
