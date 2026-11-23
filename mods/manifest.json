@@ -3,21 +3,42 @@
     {
       "id": "energy-rifle",
       "name": "AE-7 能量步枪",
-      "version": "1.0.0"
+      "desc": "高频激光能量步枪，低后坐力精准连射",
+      "version": "1.1.0",
+      "enabled": true
     },
     {
       "id": "cryo-blaster",
       "name": "CR-7 冰霜冲击枪",
-      "version": "1.0.0"
+      "desc": "命中减速目标，控场利器",
+      "version": "1.1.0",
+      "enabled": true
     },
     {
       "id": "railgun",
       "name": "MG-9 磁轨步枪",
-      "version": "1.0.0"
+      "desc": "超高穿甲电磁炮，远距离毁灭打击",
+      "version": "1.1.0",
+      "enabled": true
+    },
+    {
+      "id": "plasma-shotgun",
+      "name": "PX-12 等离子霰弹",
+      "desc": "6发高能等离子扩散弹，近战清场神枪",
+      "version": "1.0.0",
+      "enabled": true
+    },
+    {
+      "id": "vampire-arena",
+      "name": "嗜血狂潮 Mutator",
+      "desc": "击杀回复 35 HP 并触发连杀全服播报（!vamp）",
+      "version": "1.0.0",
+      "enabled": true
     },
     {
       "id": "mutator",
       "name": "Mutator 规则包",
+      "desc": "聊天 !lowgrav / !speed 等趣味物理规则",
       "version": "1.1.0",
       "enabled": false
     }
@@ -25,12 +46,22 @@
   "client": [
     {
       "id": "energy-rifle",
-      "name": "AE-7 能量步枪",
-      "version": "1.0.0"
+      "name": "AE-7 能量步枪外观",
+      "desc": "能量步枪专属客户端特效与准星反馈",
+      "version": "1.1.0",
+      "enabled": true
+    },
+    {
+      "id": "killstreak-announcer",
+      "name": "连杀播报 HUD",
+      "desc": "双杀/三杀/暴走/超神全屏横幅与连杀徽章",
+      "version": "1.0.0",
+      "enabled": true
     },
     {
       "id": "tactical-hud",
       "name": "Tactical HUD",
+      "desc": "扩展战术状态与速度监视面板",
       "version": "1.1.0",
       "enabled": false
     }

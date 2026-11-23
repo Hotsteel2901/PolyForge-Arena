@@ -160,17 +160,46 @@ export class Sfx {
       shotgun: { f: 700, d: 0.32, g: 0.75, body: 105 },
       sniper: { f: 900, d: 0.42, g: 0.85, body: 90 },
       lmg: { f: 1200, d: 0.18, g: 0.5, body: 128 },
-      melee: { f: 2400, d: 0.09, g: 0.3, body: 0 },
-      energy: { f: 2600, d: 0.14, g: 0.42, body: 220 },
-      cryo: { f: 3200, d: 0.2, g: 0.4, body: 260 },
-      rail: { f: 1100, d: 0.5, g: 0.7, body: 70 },
+      melee: { f: 3000, d: 0.11, g: 0.36, body: 0 },
+      claw: { f: 1100, d: 0.16, g: 0.46, body: 95 },
+      energy: { f: 2600, d: 0.14, g: 0.44, body: 220 },
+      cryo: { f: 3200, d: 0.2, g: 0.42, body: 260 },
+      rail: { f: 1100, d: 0.52, g: 0.78, body: 72 },
+      plasma: { f: 1850, d: 0.28, g: 0.64, body: 145 },
     };
     const s = map[kind] || map.rifle;
     if (!pos && !this._gate('shot:' + kind, 12)) return;
-    this.noise(s.d, { freq: s.f, q: 0.8, gain: s.g, sweepTo: s.f * 0.25, pos });
-    if (s.body) this.tone(s.body, s.d * 0.9, { type: 'sine', gain: 0.42, sweepTo: s.body * 0.45, pos });
-    // 尾音：室外枪声的余响，让远距离交火更有空间感
-    if (pos) this.noise(s.d * 2.2, { freq: 900, q: 0.6, gain: 0.12, type: 'lowpass', when: s.d * 0.4, sweepTo: 300, pos });
+    this.noise(s.d, { freq: s.f, q: 0.85, gain: s.g, sweepTo: s.f * 0.22, pos });
+    if (s.body) this.tone(s.body, s.d * 0.95, { type: kind === 'claw' ? 'sawtooth' : 'sine', gain: 0.44, sweepTo: s.body * 0.42, pos });
+    // 极致细分机械层次：狙击超声裂响 / 霰弹泵动 / 匕首破风 / 等离子谐波 / 弹壳金属轻响
+    if (kind === 'sniper' || kind === 'rail') {
+      this.tone(420, 0.22, { type: 'sawtooth', gain: 0.22, sweepTo: 85, pos });
+      if (!pos) this.noise(0.08, { freq: 2400, gain: 0.14, when: 0.28 });
+    } else if (kind === 'shotgun') {
+      if (!pos) {
+        this.noise(0.06, { freq: 1800, gain: 0.16, when: 0.18 });
+        this.tone(440, 0.05, { type: 'square', gain: 0.06, when: 0.22 });
+      }
+    } else if (kind === 'melee') {
+      this.tone(1400, 0.09, { type: 'triangle', gain: 0.14, sweepTo: 480, pos });
+    } else if (kind === 'plasma') {
+      this.tone(780, 0.18, { type: 'sawtooth', gain: 0.20, sweepTo: 180, pos });
+    } else if (!pos && (kind === 'rifle' || kind === 'smg' || kind === 'lmg' || kind === 'pistol')) {
+      // 细微机械枪栓 + 弹壳回落音
+      this.tone(2400 + Math.random() * 500, 0.03, { type: 'triangle', gain: 0.04, when: 0.04 });
+    }
+    if (pos) this.noise(s.d * 2.2, { freq: 900, q: 0.6, gain: 0.13, type: 'lowpass', when: s.d * 0.4, sweepTo: 300, pos });
+  }
+
+  killstreak(level = 2) {
+    const base = 523 + Math.min(6, level) * 85;
+    this.tone(base, 0.12, { type: 'triangle', gain: 0.14 });
+    this.tone(base * 1.25, 0.14, { type: 'triangle', gain: 0.12, when: 0.07 });
+    this.tone(base * 1.5, 0.20, { type: 'sine', gain: 0.12, when: 0.14 });
+  }
+
+  captureTick() {
+    this.tone(880, 0.06, { type: 'sine', gain: 0.08, sweepTo: 1120 });
   }
 
   // 弹丸从耳边掠过：高频短促呼啸，左右声像随掠过来向

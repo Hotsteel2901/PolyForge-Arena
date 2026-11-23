@@ -205,7 +205,7 @@ export class Room {
 
   // 分队：拆弹/死斗按偏好并补弱侧；军备竞赛交替分色（队伍只用于外观，实际自由混战）
   assignTeam(p, reset = false) {
-    if (this.mode === MODE.GUNGAME) {
+    if (this.mode === MODE.GUNGAME || this.mode === MODE.FFA) {
       this.ggFlip = !this.ggFlip;
       p.team = this.ggFlip ? TEAM.CT : TEAM.T;
       return p.team;
@@ -249,7 +249,7 @@ export class Room {
     if (!this.core) return; // 开局购买阶段：队伍已在加入时分配
     if (this.core.state === 'ended') return;
     if (p.alive) return; // 已在本回合出生（如开局加入）则不动，避免清掉炸弹携带者
-    if (this.mode === MODE.DEFUSAL || this.mode === MODE.TDM || this.mode === MODE.GUNGAME) {
+    if (this.mode !== MODE.ZOMBIE) {
       p.isZombie = false;
       if (this.mode !== MODE.GUNGAME) this.assignTeam(p);
       const spot = this.pickSpawn(p.team === TEAM.CT ? 'CT' : 'T');
@@ -316,7 +316,7 @@ export class Room {
       p.isZombieServant = false;
     }
 
-    if (this.mode === MODE.TDM || this.mode === MODE.GUNGAME) {
+    if (!this.modeCfg.rounds) {
       this.startContinuousRound();
       return;
     }
@@ -410,15 +410,33 @@ export class Room {
       p.boughtItems = [];
       p.bombCarrier = false;
     }
+    if (cfg.gravityMult) this.setRule('gravity', PHYS.GRAVITY * cfg.gravityMult);
     this.spawnAll();
-    if (this.mode === MODE.TDM) {
+    if (cfg.forcedPrimary) {
+      for (const p of all) this._applyForcedLoadout(p, cfg.forcedPrimary);
+    }
+    this._kothAcc = 0;
+    if (this.mode === MODE.TDM || this.mode === MODE.SNIPER || this.mode === MODE.KOTH) {
       this.core = new TdmRound({
         scoreLimit: cfg.scoreLimit,
         duration: cfg.roundTime,
         onEvent: (e) => this.handleRoundEvent(e),
       });
       this.core.start();
-      this.say(`团队死斗开始：先到 ${cfg.scoreLimit} 杀的一方获胜`);
+      const intro = this.mode === MODE.SNIPER
+        ? `飞天瞬狙开始：低重力 + Longshot 狙击，先到 ${cfg.scoreLimit} 杀获胜`
+        : this.mode === MODE.KOTH
+          ? `据点争夺开始：占领中央高亮据点持续得分，先达 ${cfg.scoreLimit} 分获胜`
+          : `团队死斗开始：先到 ${cfg.scoreLimit} 杀的一方获胜`;
+      this.say(intro);
+    } else if (this.mode === MODE.FFA) {
+      this.core = new TdmRound({
+        scoreLimit: 9999,
+        duration: cfg.roundTime,
+        onEvent: (e) => this.handleRoundEvent(e),
+      });
+      this.core.start();
+      this.say(`个人混战开始：全员各自为战，击杀回血 +${cfg.killHeal || 25} HP，先到 ${cfg.scoreLimit} 杀称王！`);
     } else {
       this.core = new GunGameRound({
         duration: cfg.roundTime,
@@ -432,10 +450,22 @@ export class Room {
   }
 
   // 持续模式复活：保留等级（军备竞赛）与队伍，重新出生
+  _applyForcedLoadout(p, weaponId) {
+    const def = this.weapons.get(weaponId);
+    const fang = this.weapons.get('fang');
+    if (!def) return;
+    p.weapons.clear();
+    if (fang) p.weapons.set('fang', new WeaponRuntime(fang));
+    p.weapons.set(def.id, new WeaponRuntime(def));
+    p.activeSlot = def.slot;
+    p.activeWeaponId = def.id;
+  }
+
   respawnContinuous(p) {
     const key = p.team === TEAM.CT ? 'CT' : 'T';
     const spot = this.pickSpawn(key);
     spawnPlayer(this, p, p.team, spot, { protect: 1.2 });
+    if (this.modeCfg.forcedPrimary) this._applyForcedLoadout(p, this.modeCfg.forcedPrimary);
   }
 
   // 实体炸弹放在 T 出生点前方（未激活），方便 T 方开局拾取
@@ -504,9 +534,9 @@ export class Room {
       const continuous = !this.modeCfg.rounds;
       const score = this.matchScore;
       // 军备竞赛的分数不是队伍分：把"等级"作为比分展示没有意义，这里只记局数
-      if (this.mode === MODE.TDM) {
+      if (this.mode === MODE.TDM || this.mode === MODE.SNIPER || this.mode === MODE.KOTH) {
         if (this.matchScore[winner] !== undefined) this.matchScore[winner] += 1;
-      } else if (this.mode === MODE.GUNGAME) {
+      } else if (this.mode === MODE.GUNGAME || this.mode === MODE.FFA) {
         // 自由混战没有队伍分：胜负只看个人等级，见 snapshot 的 lv 字段
       } else if (winner === 'DRAW') {
         this.matchScore.HUMAN += 1;
@@ -692,7 +722,7 @@ export class Room {
       if (!p.alive) {
         if (p.respawnAt && this.time >= p.respawnAt && !this.noRespawn) {
           if (this.mode === MODE.ZOMBIE) respawnZombie(this, p);
-          else if (this.mode === MODE.TDM || this.mode === MODE.GUNGAME) this.respawnContinuous(p);
+          else if (!this.modeCfg.rounds) this.respawnContinuous(p);
         }
         continue;
       }
@@ -727,6 +757,33 @@ export class Room {
 
     this.updateProjectiles(dt);
     this.core?.update(dt);
+    // 据点争夺（KOTH）：每秒检测中央据点控制权并持续加分
+    if (this.mode === MODE.KOTH && this.core?.state === 'live') {
+      this._kothAcc = (this._kothAcc || 0) + dt;
+      if (this._kothAcc >= 1.0) {
+        this._kothAcc -= 1.0;
+        const hill = (this.map.sites && this.map.sites[0]) || { pos: { x: 0, z: 0 }, radius: 6 };
+        const rad = Math.max(4.5, hill.radius || 6);
+        let ctIn = 0, tIn = 0;
+        for (const p of this.players.values()) {
+          if (!p.alive) continue;
+          if (Math.hypot(p.pos.x - hill.pos.x, p.pos.z - hill.pos.z) <= rad) {
+            if (p.team === TEAM.CT) ctIn++;
+            else if (p.team === TEAM.T) tIn++;
+          }
+        }
+        if (ctIn > 0 && tIn === 0) { this.core.addKill('CT'); this.core.addKill('CT'); }
+        else if (tIn > 0 && ctIn === 0) { this.core.addKill('T'); this.core.addKill('T'); }
+      }
+    }
+    // 个人混战（FFA）击杀达标或到点结算
+    if (this.mode === MODE.FFA && this.core?.state === 'live') {
+      const limit = this.modeCfg.scoreLimit || 25;
+      const top = [...this.players.values()].sort((a, b) => (b.kills - a.kills) || (b.score - a.score))[0];
+      if (top && (top.kills >= limit || this.core.timeLeft <= 0)) {
+        this.core.end(top.name, top.kills >= limit ? 'score' : 'timeout');
+      }
+    }
     // 军备竞赛到点：等级最高者（并列比击杀）夺冠
     if (this.mode === MODE.GUNGAME && this.core?.state === 'live' && this.core.timeLeft <= 0) {
       const ranked = [...this.players.values()].sort((a, b) =>
@@ -1286,7 +1343,7 @@ export class Room {
       rn: this.roundNum,
       tl: Math.max(0, Math.ceil(this.core?.timeLeft ?? 0)),
       bl: Math.max(0, Math.ceil(this.bomb.timeLeft ?? 0)),
-      sc: this.mode === MODE.TDM ? (this.core?.scores || this.matchScore) : this.matchScore,
+      sc: (this.mode === MODE.TDM || this.mode === MODE.SNIPER || this.mode === MODE.KOTH) ? (this.core?.scores || this.matchScore) : this.matchScore,
       sl: this.modeCfg.scoreLimit || 0,
       ph: this.phase,
       bu: Math.max(0, Math.ceil(this.buyUntil - this.time)),

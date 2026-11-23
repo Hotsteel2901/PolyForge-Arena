@@ -1,17 +1,4 @@
-// 模式定义（服务端与客户端共用）：一处声明，避免两端各写一份 if/else 慢慢漂移。
-//
-// 字段说明：
-//   teamBased  是否分队（军备竞赛是自由混战）
-//   buy        是否有购买阶段
-//   respawn    死亡后是否自动复活
-//   sites      是否有炸弹安放点
-//   rounds     是否按"回合"结算（死亡不复活 / 回合结束切图）
-//   scoreLimit 团队死斗的取胜击杀数
-//   roundTime  单局时长（秒）
-//   ladder     军备竞赛的武器阶梯（最后一个用近战武器收尾）
-//
-// 新增模式时：这里加一条 + host/modes/ 加一个状态机 + Room 里接入 kill/spawn，
-// 客户端（HUD/菜单/结算）会自动跟随 modeCfg，不需要再散落判断。
+// 模式定义（服务端与客户端共用）：7 大竞技模式统一声明。
 
 export const GG_LADDER = Object.freeze(['k9', 'vx9', 'arc17', 'warden', 'bruiser', 'longshot', 'fang']);
 
@@ -25,7 +12,7 @@ export const MODES = Object.freeze({
     respawn: false,
     sites: true,
     rounds: true,
-    intro: 'T 方安放炸弹，CT 方阻止或拆除',
+    intro: 'T 方安放炸弹，CT 方阻止或拆除，经典战术爆破',
   },
   zombie: {
     id: 'zombie',
@@ -36,7 +23,7 @@ export const MODES = Object.freeze({
     respawn: true,
     sites: false,
     rounds: true,
-    intro: '人类撑到时间结束，被咬到即感染',
+    intro: '人类坚守至倒计时结束，被尸爪感染后加入丧尸阵营',
   },
   tdm: {
     id: 'tdm',
@@ -50,7 +37,7 @@ export const MODES = Object.freeze({
     scoreLimit: 60,
     roundTime: 420,
     respawnDelay: 3,
-    intro: '先到 60 杀的队伍获胜，阵亡 3 秒复活',
+    intro: '满配极速复活，先到 60 杀的队伍获胜',
   },
   gungame: {
     id: 'gungame',
@@ -64,7 +51,52 @@ export const MODES = Object.freeze({
     roundTime: 600,
     respawnDelay: 2,
     ladder: GG_LADDER,
-    intro: '每击杀一次升级武器，用匕首收尾夺冠',
+    intro: '每击杀一次升级武器，用战术匕首完成终结夺冠',
+  },
+  ffa: {
+    id: 'ffa',
+    label: '个人混战',
+    short: '混战',
+    teamBased: false,
+    buy: false,
+    respawn: true,
+    sites: false,
+    rounds: false,
+    scoreLimit: 25,
+    roundTime: 480,
+    respawnDelay: 2,
+    killHeal: 25,
+    intro: '全员各自为战，击杀回血 +25 HP，先到 25 杀称王',
+  },
+  sniper: {
+    id: 'sniper',
+    label: '飞天瞬狙',
+    short: '瞬狙',
+    teamBased: true,
+    buy: false,
+    respawn: true,
+    sites: false,
+    rounds: false,
+    scoreLimit: 30,
+    roundTime: 420,
+    respawnDelay: 2,
+    gravityMult: 0.68,
+    forcedPrimary: 'longshot',
+    intro: '低重力高跳 + 全员 Longshot 狙击与匕首，先到 30 杀获胜',
+  },
+  koth: {
+    id: 'koth',
+    label: '据点争夺',
+    short: '据点',
+    teamBased: true,
+    buy: false,
+    respawn: true,
+    sites: true,
+    rounds: false,
+    scoreLimit: 120,
+    roundTime: 480,
+    respawnDelay: 3,
+    intro: '占领中央高亮据点持续得分，先达 120 分的队伍获胜',
   },
 });
 

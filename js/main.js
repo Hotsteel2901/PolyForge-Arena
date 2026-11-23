@@ -137,7 +137,9 @@ function applySettings() {
   input.adsMode = settings.adsMode || 'hold';
   input.sprintMode = settings.sprintMode || 'hold';
   sfx.setVolume(settings.vol);
-  renderer.applySettings({ shadow: settings.shadow, quality: settings.quality });
+  renderer.applySettings({ shadow: settings.shadow, quality: settings.quality, colorStyle: settings.colorStyle || 'classic' });
+  document.body.classList.toggle('touch-lefthand', !!settings.leftHand);
+  document.documentElement.style.setProperty('--btn-opacity', String(settings.btnOpacity ?? 0.9));
   hud.setCrosshairColor(settings.crosshair || '#dcffe6');
   hud.haptics = !!settings.haptics;
   document.documentElement.style.setProperty('--btn-scale', String(settings.btnScale ?? 1));
@@ -159,6 +161,11 @@ function bindSettingsUI() {
   $('set-sprint').value = settings.sprintMode || 'hold';
   $('set-btnscale').value = String(settings.btnScale ?? 1);
   $('set-haptics').value = settings.haptics === false ? '0' : '1';
+  if ($('set-colorstyle')) { $('set-colorstyle').value = settings.colorStyle || 'classic'; $('set-colorstyle').onchange = (e) => { settings.colorStyle = e.target.value; saveSettings(); applySettings(); }; }
+  if ($('set-inverty')) { $('set-inverty').value = settings.invertY ? '1' : '0'; $('set-inverty').onchange = (e) => { settings.invertY = e.target.value === '1'; saveSettings(); }; }
+  if ($('set-lefthand')) { $('set-lefthand').value = settings.leftHand ? '1' : '0'; $('set-lefthand').onchange = (e) => { settings.leftHand = e.target.value === '1'; saveSettings(); applySettings(); }; }
+  if ($('set-btnopacity')) { $('set-btnopacity').value = String(settings.btnOpacity ?? 0.9); $('set-btnopacity').oninput = (e) => { settings.btnOpacity = +e.target.value; saveSettings(); applySettings(); }; }
+  if ($('set-gyro')) { $('set-gyro').value = settings.gyro ? '1' : '0'; $('set-gyro').onchange = (e) => { settings.gyro = e.target.value === '1'; saveSettings(); }; }
   // 触控灵敏度只对触屏设备有意义，非触屏隐藏该行，避免设置面板出现无效项
   const touchRow = $('set-touch-sens')?.closest('label');
   if (touchRow && !input.isTouchPrimary()) touchRow.classList.add('hidden');
@@ -270,35 +277,44 @@ async function connect() {
   const name = $('name-input').value.trim() || '战士';
   const mode = $('mode-select').value;
   const team = $('team-select').value;
+  const mapId = $('map-select')?.value || 'auto';
+  const relayMode = $('relay-select')?.value || 'auto';
   const roomCode = $('room-input').value.trim();
   const bots = Number($('bot-select')?.value ?? 8);
   const botSkill = Number($('difficulty-select')?.value ?? 1);
+  net.relayMode = relayMode;
   $('menu').classList.add('hidden');
   $('loading').classList.remove('hidden');
-  $('loading-text').textContent = '初始化 VibeHub…';
   try {
-    await initVibe();
-    // 平台要求：建房/进房/数据接口都必须携带游戏 token，未登录会返回 401「未授权」。
-    // 因此进入对局前必须完成登录；登录弹窗需允许浏览器弹窗。
-    if (!net.vibe.isLoggedIn()) {
-      $('loading-text').textContent = '请先登录 VibeHub 账号…';
+    if (relayMode !== 'relay') {
+      $('loading-text').textContent = '初始化 VibeHub…';
       try {
-        await net.vibe.login();
-      } catch (e) {
-        throw new Error('未登录，请先点击「登录」完成授权');
+        await initVibe();
+        if (!net.vibe.isLoggedIn()) {
+          $('loading-text').textContent = '请先登录 VibeHub 账号…';
+          await net.vibe.login();
+        }
+      } catch (vErr) {
+        if (relayMode === 'vibehub') throw vErr;
+        console.warn('[connect] VibeHub 不可用，自动切换公网中继回退', vErr);
+        $('loading-text').textContent = 'VibeHub 不可用，切换公网中继…';
       }
+    } else {
+      $('loading-text').textContent = '连接公网中继房间…';
     }
-    $('loading-text').textContent = '加入房间…';
     const res = await net.join({
       name,
       mode,
       team,
+      mapId,
+      relayMode,
       roomId: roomCode || undefined,
       quick: !roomCode,
       bots,
       botSkill,
     });
-    // 加入后等待 welcome（房主本地同步派发 / 远程经 P2P 到达），welcome 事件进入游戏
+    if (res?.transport === 'relay') hud.toast(`🌐 已通过公网中继进入房间 ${res.roomId}`);
+    else if (res?.transport === 'local') hud.toast(`📡 已通过本地频道进入房间 ${res.roomId}`);
     window.__joinResult = res;
   } catch (err) {
     console.error('[connect]', err);
@@ -320,6 +336,7 @@ async function connectOffline() {
   const name = $('name-input').value.trim() || '战士';
   const mode = $('mode-select').value;
   const team = $('team-select').value;
+  const mapId = $('map-select')?.value || 'auto';
   const bots = Number($('bot-select')?.value ?? 8);
   const botSkill = Number($('difficulty-select')?.value ?? 1);
   $('menu').classList.add('hidden');
@@ -335,7 +352,7 @@ async function connectOffline() {
     net.room = null;
     net.host = new Host(net);
     // host.init 内部 start 本地 Room、加入玩家并本地回环 dispatch welcome → enterGame
-    await net.host.init({ name, mode, team, bots, botSkill });
+    await net.host.init({ name, mode, team, mapId, bots, botSkill });
     net.connected = true;
     window.__joinResult = { isHost: true, roomId: null, offline: true };
   } catch (err) {
@@ -408,7 +425,7 @@ function enterGame(welcome) {
     // 这样设置里的灵敏度对触屏生效，开镜后也会按倍率降速。
     const s = 0.0022 * (input.effectiveSens || 1) * (settings.touchSens ?? 2);
     input.yaw -= dx * s;
-    input.pitch = clamp(input.pitch - dy * s, -1.55, 1.55);
+    input.pitch = clamp(input.pitch - dy * s * (settings.invertY ? -1 : 1), -1.55, 1.55);
   }, {
     onShop: () => {
       toggleBuy(); // 拆弹=购买菜单，生化=选枪界面
@@ -2224,3 +2241,56 @@ function boot() {
 }
 
 boot();
+
+// ---------------- Ultra Edition：可视化模组开关 + 陀螺仪瞄准 ----------------
+(async function initUltraMenuMods() {
+  const box = document.getElementById('menu-mods');
+  if (!box) return;
+  try {
+    const res = await fetch(new URL('../mods/manifest.json', import.meta.url));
+    if (!res.ok) return;
+    const manifest = await res.json();
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem('pfa-mods') || '{}'); } catch {}
+    const items = [
+      ...(manifest.server || []).map((m) => ({ ...m, side: 'server' })),
+      ...(manifest.client || []).map((m) => ({ ...m, side: 'client' })),
+    ];
+    box.innerHTML = `<div class="mods-title">模组中心（点击即刻开关 · 进局生效）</div>` +
+      items.map((m) => {
+        const key = `${m.side}:${m.id}`;
+        const on = key in saved ? !!saved[key] : m.enabled !== false;
+        return `<label class="mod-chip ${on ? 'on' : ''}" title="${m.desc || ''}">
+          <input type="checkbox" data-modkey="${key}" ${on ? 'checked' : ''}>
+          <span>${m.name}</span>
+          <em>${m.side === 'server' ? '武器/规则' : 'HUD'}</em>
+        </label>`;
+      }).join('');
+    box.querySelectorAll('input[data-modkey]').forEach((inp) => {
+      inp.addEventListener('change', () => {
+        saved[inp.dataset.modkey] = inp.checked;
+        try { localStorage.setItem('pfa-mods', JSON.stringify(saved)); } catch {}
+        inp.closest('.mod-chip')?.classList.toggle('on', inp.checked);
+      });
+    });
+  } catch { /* ignore */ }
+})();
+
+// 手机陀螺仪辅助瞄准（设置开启后生效）
+(() => {
+  let last = null;
+  window.addEventListener('deviceorientation', (e) => {
+    if (!settings.gyro || e.alpha === null || e.beta === null) return;
+    if (last && state.connected && state.self.alive) {
+      let da = e.alpha - last.a;
+      if (da > 180) da -= 360;
+      if (da < -180) da += 360;
+      const db = e.beta - last.b;
+      if (Math.abs(da) < 25 && Math.abs(db) < 25) {
+        input.yaw += da * 0.011;
+        input.pitch = clamp(input.pitch + db * 0.009 * (settings.invertY ? -1 : 1), -1.45, 1.45);
+      }
+    }
+    last = { a: e.alpha, b: e.beta };
+  }, { passive: true });
+})();

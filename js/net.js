@@ -1,20 +1,25 @@
-// 网络层：VibeHub SDK P2P 传输适配器 + 事件分发。
-// 替换原 WebSocket 封装，保持 on/off/dispatch/send/sendInput/chat/mod/ping 接口不变。
-//
-// 同步模型：state-sync（房主权威）。房主（isHost）在本 tab 内运行权威模拟并广播快照；
-// 其他玩家把输入/命令单发房主，收到快照后本地预测 + 插值渲染。
+// 网络层（Ultra Edition）：
+// 1. 完整保留 VibeHub SDK P2P 联机（rooms / quickJoin / room.join / announce）
+// 2. 新增可选公网中继回退（MQTT WSS 公共中继 HiveMQ/EMQX/Mosquitto + 同设备 BroadcastChannel）
+//    支持 3 种联机模式：auto（优先 VibeHub，不可用自动无缝回退公网中继）、vibehub（仅 VibeHub）、relay（直连公网中继）
+// 3. 修复 net.mod() 重复 key `type` 导致自定义 Mod 消息丢失的 Bug
 
 import { Host } from './host.js';
 
+const RELAY_BROKERS = [
+  'wss://broker.hivemq.com:8884/mqtt',
+  'wss://broker.emqx.io:8084/mqtt',
+  'wss://test.mosquitto.org:8081/mqtt',
+];
+const MQTT_CDN = 'https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js';
+
 function randRoomId() {
-  // 6 位简短房间码，去掉易混淆字符（I/L/O/0/1），便于口述与输入
   const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
   let s = '';
   for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
   return s;
 }
 
-// 给任意 Promise 加超时：超时先 reject，但避免未决 Promise 造成泄漏（结果仍在，只是没人等）。
 function withTimeout(promise, ms, message) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(message)), ms);
@@ -23,6 +28,89 @@ function withTimeout(promise, ms, message) {
       (e) => { clearTimeout(t); reject(e); }
     );
   });
+}
+
+function loadMqttLib() {
+  if (window.mqtt) return Promise.resolve(window.mqtt);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = MQTT_CDN;
+    s.async = true;
+    s.onload = () => (window.mqtt ? resolve(window.mqtt) : reject(new Error('mqtt missing')));
+    s.onerror = () => reject(new Error('mqtt load failed'));
+    document.head.appendChild(s);
+  });
+}
+
+// 轻量公网中继房间适配器：对外暴露与 VibeHub room 完全一致的接口
+// (peerId, isHost, hostId, send, onMessage, onPeer, announce, close, leave)
+class RelayRoomAdapter {
+  constructor(roomId, peerId, isHost, client, channel) {
+    this.roomId = roomId;
+    this.peerId = peerId;
+    this.isHost = isHost;
+    this.hostId = isHost ? peerId : null;
+    this.client = client;
+    this.channel = channel;
+    this._msgHandlers = [];
+    this._peerHandlers = [];
+    this.baseTopic = `polyforge/v1/${roomId}`;
+
+    const handleIncoming = (raw) => {
+      let env;
+      try { env = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return; }
+      if (!env || env.from === this.peerId) return;
+      if (env.to && env.to !== this.peerId) return;
+      if (env.kind === 'host_hello' && !this.isHost) {
+        this.hostId = env.from;
+        return;
+      }
+      if (env.kind === 'leave') {
+        for (const fn of this._peerHandlers) fn({ type: 'leave', id: env.from });
+        return;
+      }
+      if (env.kind === 'msg' && env.data) {
+        if (!this.isHost && !this.hostId && env.fromHost) this.hostId = env.from;
+        for (const fn of this._msgHandlers) fn(env.data, env.from);
+      }
+    };
+
+    if (this.client) {
+      this.client.subscribe(`${this.baseTopic}/+`, { qos: 0 });
+      this.client.on('message', (_t, payload) => handleIncoming(payload.toString()));
+    }
+    if (this.channel) {
+      this.channel.onmessage = (e) => handleIncoming(e.data);
+    }
+    if (this.isHost) {
+      this._beacon = setInterval(() => this._pub({ kind: 'host_hello', from: this.peerId }), 2500);
+    }
+  }
+
+  _pub(env) {
+    const str = JSON.stringify(env);
+    if (this.client) {
+      try { this.client.publish(`${this.baseTopic}/${this.peerId}`, str, { qos: 0 }); } catch { /* ignore */ }
+    }
+    if (this.channel) {
+      try { this.channel.postMessage(env); } catch { /* ignore */ }
+    }
+  }
+
+  send(data, toPeerId = null) {
+    this._pub({ kind: 'msg', from: this.peerId, to: toPeerId || null, fromHost: this.isHost, data });
+  }
+
+  onMessage(fn) { this._msgHandlers.push(fn); }
+  onPeer(fn) { this._peerHandlers.push(fn); }
+  async announce() { return true; }
+  async close() { this._pub({ kind: 'leave', from: this.peerId }); }
+  leave() {
+    if (this._beacon) clearInterval(this._beacon);
+    this._pub({ kind: 'leave', from: this.peerId });
+    try { this.client?.end(true); } catch { /* ignore */ }
+    try { this.channel?.close(); } catch { /* ignore */ }
+  }
 }
 
 export class Net {
@@ -37,6 +125,8 @@ export class Net {
     this.host = null;
     this.roomId = null;
     this.offline = false;
+    this.transport = 'vibehub'; // vibehub | relay | local | offline
+    this.relayMode = 'auto';    // auto | vibehub | relay
     this._joinDiag = null;
     window.__joinDiag = () => this._joinDiag;
   }
@@ -56,39 +146,133 @@ export class Net {
 
   dispatch(msg) {
     for (const fn of this.listeners.get('*') || []) {
-      try {
-        fn(msg);
-      } catch (err) {
-        console.error('[net] wildcard handler error', err);
-      }
+      try { fn(msg); } catch (err) { console.error('[net] wildcard handler error', err); }
     }
     for (const fn of this.listeners.get(msg.type) || []) {
-      try {
-        fn(msg);
-      } catch (err) {
-        console.error('[net] handler error', err);
-      }
+      try { fn(msg); } catch (err) { console.error('[net] handler error', err); }
     }
   }
 
-  // 加入/创建 VibeHub 房间。quick 时优先快速匹配同模式空闲房间，找不到则自己建房成为房主。
-  // roomId 提供时直接加入指定房间（分享房间码）；若该房间不存在则创建并成为房主。
-  // 防卡死：非房主在等待 welcome 时设超时（房主刷新后残留的“陈旧房主”房间会让 welcome
-  // 永远不来，导致转圈卡死）；自动建房场景超时后换全新房间重试一次。
-  async join({ name, mode, team, roomId, quick = true, bots, botSkill }) {
-    if (!this.vibe) throw new Error('VibeHub 未初始化');
+  // 公网中继回退（MQTT WSS + BroadcastChannel 同设备直连）
+  async joinViaRelay({ name, mode, team, roomId, mapId, bots, botSkill }) {
+    const explicit = !!roomId;
+    const targetId = explicit ? String(roomId).trim().toUpperCase() : randRoomId();
+    const peerId = `pf_${Math.random().toString(36).slice(2, 10)}`;
+    let client = null;
+    let channel = null;
+
+    try {
+      channel = new BroadcastChannel(`polyforge/v1/${targetId}`);
+    } catch { /* ignore */ }
+
+    try {
+      const lib = await withTimeout(loadMqttLib(), 5000, 'mqtt cdn timeout');
+      for (const url of RELAY_BROKERS) {
+        try {
+          client = await new Promise((resolve, reject) => {
+            let done = false;
+            const c = lib.connect(url, {
+              clientId: `pfa_${peerId}`,
+              clean: true,
+              keepalive: 25,
+              connectTimeout: 5500,
+              reconnectPeriod: 0,
+              protocolVersion: 4,
+            });
+            const fail = (e) => { if (!done) { done = true; try { c.end(true); } catch {} reject(e); } };
+            c.on('connect', () => { if (!done) { done = true; c.options.reconnectPeriod = 4000; resolve(c); } });
+            c.on('error', fail);
+            c.on('close', () => fail(new Error('closed')));
+            setTimeout(() => fail(new Error('timeout')), 6000);
+          });
+          break;
+        } catch { /* try next broker */ }
+      }
+    } catch { /* fallback to local BroadcastChannel */ }
+
+    if (!client && !channel) {
+      throw new Error('公网中继与本地频道均不可用，请检查网络或使用离线模式');
+    }
+
+    // 显式输入房间码时先作为客端尝试 2.4 秒握手；若无房主响应则自动建房成为房主
+    let isHost = !explicit;
+    let room = new RelayRoomAdapter(targetId, peerId, isHost, client, channel);
+    this.room = room;
+    this.roomId = targetId;
+    this.peerId = peerId;
+    this.isHost = isHost;
+    this.transport = client ? 'relay' : 'local';
+
+    room.onMessage((msg, fromPeerId) => {
+      if (!msg || typeof msg !== 'object') return;
+      if (this.isHost) this.host?.handleMessage(msg, fromPeerId);
+      else this.dispatch(msg);
+    });
+    room.onPeer((ev) => this.handlePeerEvent(ev));
+
+    if (!isHost) {
+      const welcomeP = this.waitForWelcome(2800);
+      const joinMsg = { type: 'join', name, mode, team };
+      room.send(joinMsg);
+      const retry = setInterval(() => room.send(joinMsg), 600);
+      try {
+        await welcomeP;
+        clearInterval(retry);
+        this.hostPeerId = room.hostId;
+        this.connected = true;
+        return { isHost: false, roomId: targetId, transport: this.transport };
+      } catch {
+        clearInterval(retry);
+        // 房间内暂无房主：无缝升级为该房间房主
+        isHost = true;
+        room.isHost = true;
+        room.hostId = peerId;
+        this.isHost = true;
+        this.hostPeerId = peerId;
+        room._beacon = setInterval(() => room._pub({ kind: 'host_hello', from: peerId }), 2500);
+      }
+    }
+
+    this.connected = true;
+    this.host = new Host(this);
+    await this.host.init({ name, mode, team, mapId, bots, botSkill });
+    return { isHost: true, roomId: targetId, transport: this.transport };
+  }
+
+  async join({ name, mode, team, roomId, mapId, quick = true, bots, botSkill, relayMode }) {
+    const rMode = relayMode || this.relayMode || 'auto';
+    if (rMode === 'relay') {
+      return this.joinViaRelay({ name, mode, team, roomId, mapId, bots, botSkill });
+    }
+    if (!this.vibe) {
+      if (rMode === 'auto') {
+        console.warn('[net] VibeHub 不可用，自动回退至公网中继');
+        return this.joinViaRelay({ name, mode, team, roomId, mapId, bots, botSkill });
+      }
+      throw new Error('VibeHub 未初始化');
+    }
+
+    try {
+      return await this._joinViaVibeHub({ name, mode, team, roomId, mapId, quick, bots, botSkill });
+    } catch (err) {
+      if (rMode === 'auto') {
+        console.warn('[net] VibeHub 联机失败，自动切换公网中继回退：', err?.message || err);
+        return this.joinViaRelay({ name, mode, team, roomId, mapId, bots, botSkill });
+      }
+      throw err;
+    }
+  }
+
+  async _joinViaVibeHub({ name, mode, team, roomId, mapId, quick = true, bots, botSkill }) {
     const explicit = !!roomId;
     const originalCode = explicit ? String(roomId).trim().toUpperCase() : '';
     let targetId = originalCode;
     let attempt = 0;
-    let wantedHost = false; // 自建房间期望自己是房主（随机码撞上已存在房间时需换码）
-    const maxAttempts = 2; // 显式房间码与自动建房都允许整体重试一次
+    let wantedHost = false;
+    const maxAttempts = 2;
 
-    // 加入诊断：失败后可在控制台 window.__joinDiag() 查看
     this._joinDiag = { explicit, code: originalCode, precheck: null, attempt: 0 };
 
-    // 显式房间码：先确认房间真实存在且未关闭/未满，避免把拼错或失效的房间码
-    // 误当成“新房间”自建（这正是“房间码连不上、却开进一个空房间”的现象）。
     if (explicit) {
       let found = false;
       let full = false;
@@ -124,7 +308,6 @@ export class Net {
             console.warn('[net] quickJoin failed, will host a new room', err);
           }
           if (!targetId) {
-            // 房主刚建房的 announce 可能尚未生效：短暂等待后重试一次，避免误开新房间
             try {
               await new Promise((r) => setTimeout(r, 800));
               targetId = await this.vibe.rooms.quickJoin({
@@ -137,7 +320,7 @@ export class Net {
         }
         if (!targetId) {
           targetId = randRoomId();
-          wantedHost = true; // 随机生成房间码，期望成为房主
+          wantedHost = true;
         }
       }
 
@@ -147,11 +330,10 @@ export class Net {
       } catch (err) {
         this._joinDiag.joinErr = (err && err.message) || '';
         if (explicit) {
-          // 确认存在的房间加入失败：可能是连接建立慢，整体重试一次
           if (attempt < maxAttempts) continue;
           throw err;
         }
-        targetId = ''; // join 失败且非显式：换新房间重试
+        targetId = '';
         continue;
       }
       this.room = room;
@@ -159,27 +341,24 @@ export class Net {
       this.peerId = room.peerId;
       this.isHost = !!room.isHost;
       this.hostPeerId = room.hostId;
+      this.transport = 'vibehub';
       this._joinDiag.isHost = this.isHost;
       this._joinDiag.hostPeerId = this.hostPeerId;
 
       room.onMessage((msg, fromPeerId) => {
         if (!msg || typeof msg !== 'object') return;
-        if (this.isHost) {
-          this.host?.handleMessage(msg, fromPeerId);
-        } else {
-          this.dispatch(msg);
-        }
+        if (this.isHost) this.host?.handleMessage(msg, fromPeerId);
+        else this.dispatch(msg);
       });
       room.onPeer((ev) => this.handlePeerEvent(ev));
 
       if (this.isHost) {
         this.connected = true;
         this.host = new Host(this);
-        await this.host.init({ name, mode, team, bots, botSkill });
-        return { isHost: true, roomId: targetId };
+        await this.host.init({ name, mode, team, mapId, bots, botSkill });
+        return { isHost: true, roomId: targetId, transport: 'vibehub' };
       }
 
-      // 本意自建房间却成了非房主 → 随机码撞上已存在房间，立即换码重试，避免串房
       if (wantedHost) {
         try { room.leave(); } catch { /* ignore */ }
         this.room = null;
@@ -188,9 +367,6 @@ export class Net {
         continue;
       }
 
-      // 非房主：先挂 welcome 监听（welcome 由 join 消息触发，必须提前注册），再发加入意图；
-      // 注意：vibe.room.join() 刚返回时 P2P/中继连接可能尚未建立，首条 join 会被丢弃，
-      // 导致房主收不到、welcome 永不返回。因此在等待 welcome 期间周期性重发（房主会忽略重复 join）。
       const welcomePromise = this.waitForWelcome(10000);
       const joinMsg = { type: 'join', name, mode, team };
       const sendJoin = () => {
@@ -199,10 +375,7 @@ export class Net {
       };
       sendJoin();
       const joinRetry = setInterval(sendJoin, 700);
-      welcomePromise.then(
-        () => clearInterval(joinRetry),
-        () => clearInterval(joinRetry)
-      );
+      welcomePromise.then(() => clearInterval(joinRetry), () => clearInterval(joinRetry));
       try {
         await welcomePromise;
         this._joinDiag.welcome = 'ok';
@@ -212,20 +385,18 @@ export class Net {
         this.room = null;
         this.hostPeerId = null;
         if (explicit) {
-          // 已确认存在的房间仍握手失败：整个流程再试一次（可能是连接建立慢）
           if (attempt < maxAttempts) continue;
           throw err;
         }
-        targetId = ''; // 自动建房：换全新房间重试，避开残留的陈旧房主
+        targetId = '';
         continue;
       }
       this.connected = true;
-      return { isHost: false, roomId: targetId };
+      return { isHost: false, roomId: targetId, transport: 'vibehub' };
     }
     throw new Error('无法加入房间，请重试');
   }
 
-  // 等待房主 welcome；超时自动移除监听并拒绝。
   waitForWelcome(timeoutMs) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -260,7 +431,6 @@ export class Net {
     }
   }
 
-  // 本端发送：房主走本地回环，其余玩家单发房主 peer（未知房主 peer 时广播兜底）。
   send(obj) {
     if (!this.connected) return;
     if (this.isHost) {
@@ -283,8 +453,8 @@ export class Net {
     this.send({ type: 'chat', text });
   }
 
-  mod(type, payload) {
-    this.send({ type: 'mod', type, payload });
+  mod(modType, payload) {
+    this.send({ type: 'mod', modType, payload });
   }
 
   ping() {
@@ -293,13 +463,10 @@ export class Net {
 
   leave() {
     try {
-      if (this.host?.room) this.host.room.stop(); // 停止房主 30Hz 模拟
-      // 房主离开时关闭并下架房间：避免残留“陈旧房主”房间让刷新后重进同一房间卡死
+      if (this.host?.room) this.host.room.stop();
       if (this.isHost && this.room) this.room.close?.().catch(() => {});
       this.room?.leave();
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
     this.room = null;
     this.connected = false;
     this.isHost = false;

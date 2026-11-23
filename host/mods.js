@@ -77,8 +77,12 @@ export async function loadServerMods(room, dir = '../mods') {
   // enabled:false 的模组默认不加载（示例/实验性模组）；?mods=all 可强制全开
   const forceAll = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('mods') === 'all';
+  let userMods = {};
+  try { userMods = JSON.parse(localStorage.getItem('pfa-mods') || '{}'); } catch {}
   for (const meta of list.server || []) {
-    if (meta.enabled === false && !forceAll) continue;
+    const key = 'server:' + meta.id;
+    const enabled = key in userMods ? !!userMods[key] : meta.enabled !== false;
+    if (!enabled && !forceAll) continue;
     const id = meta.id;
     try {
       const mod = (await import(`${dir}/server/${id}/mod.js?v=${Date.now()}-${id}`)).default;

@@ -12,8 +12,12 @@ export async function loadClientMods({ net, hud, state, settings = null }) {
     return loaded;
   }
   const forceAll = new URLSearchParams(location.search).get('mods') === 'all';
+  let userMods = {};
+  try { userMods = JSON.parse(localStorage.getItem('pfa-mods') || '{}'); } catch {}
   for (const meta of list.client || []) {
-    if (meta.enabled === false && !forceAll) continue;
+    const key = 'client:' + meta.id;
+    const enabled = key in userMods ? !!userMods[key] : meta.enabled !== false;
+    if (!enabled && !forceAll) continue;
     try {
       const mod = (await import(`../mods/client/${meta.id}/mod.js?v=${Date.now()}-${meta.id}`)).default;
       if (!mod || typeof mod.init !== 'function') continue;

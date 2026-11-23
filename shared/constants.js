@@ -18,6 +18,9 @@ export const MODE = Object.freeze({
   ZOMBIE: 'zombie',
   TDM: 'tdm',
   GUNGAME: 'gungame',
+  FFA: 'ffa',
+  SNIPER: 'sniper',
+  KOTH: 'koth',
 });
 
 export const MODE_LABEL = Object.freeze({
@@ -25,6 +28,9 @@ export const MODE_LABEL = Object.freeze({
   zombie: '生化模式',
   tdm: '团队死斗',
   gungame: '军备竞赛',
+  ffa: '个人混战',
+  sniper: '飞天瞬狙',
+  koth: '据点争夺',
 });
 
 // 客户端 → 服务器
@@ -70,21 +76,21 @@ export const EVENT = Object.freeze({
 
 // 玩家物理常量（单位：米/秒，米）
 export const PHYS = Object.freeze({
-  HALF: 0.35,          // 玩家碰撞半宽
-  STAND_H: 1.8,        // 站立高度
-  CROUCH_H: 1.2,       // 蹲下高度
+  HALF: 0.35,
+  STAND_H: 1.8,
+  CROUCH_H: 1.2,
   EYE_STAND: 1.62,
   EYE_CROUCH: 1.05,
-  SPEED: 4.6,          // 人类基础速度
-  SPRINT_MULT: 1.3,
-  CROUCH_MULT: 0.55,
-  ZOMBIE_SPEED: 4.95,  // 略快于人类基础速度（4.6），但不足以单靠速度贴脸
-  ZOMBIE_JUMP: 6.9,
+  SPEED: 4.75,
+  SPRINT_MULT: 1.32,
+  CROUCH_MULT: 0.56,
+  ZOMBIE_SPEED: 5.05,
+  ZOMBIE_JUMP: 7.0,
   ZOMBIE_HP: 420,
   ZOMBIE_REGEN: 2.5,
   ZOMBIE_SLOW_TICKS: 15,
   ZOMBIE_SLOW_MULT: 0.55,
-  JUMP: 5.8,
+  JUMP: 5.9,
   GRAVITY: -14,
   TERMINAL: -22,
 });
@@ -96,32 +102,23 @@ export const WEAPON_SLOTS = Object.freeze({
   GRENADE: 3,
 });
 
-// 生化模式“琉璃决战”末段：最后 60 秒全员变身、不再复活
 export const FINALE = Object.freeze({
   DURATION: 60,
-  // 猎人：高血量高伤害，但伤害倍率下调，避免 60 秒决战在几秒内一边倒结束
   HUNTER_HP: 500,
   HUNTER_ARMOR: 100,
   HUNTER_DAMAGE: 1.7,
-  // 尸王 / 尸仆：血量与伤害提高，作为决战的"boss"能真正扛住猎人集火
   KING_HP: 2600,
   KING_ARMOR: 120,
-  KING_DAMAGE: 1.6, // 必须略低于琉璃猎人
+  KING_DAMAGE: 1.6,
   SERVANT_HP: 1500,
   SERVANT_ARMOR: 70,
   SERVANT_DAMAGE: 1.25,
-  ZOMBIE_HP_MULT: 2.0, // 其余丧尸提升血量，避免决战瞬间被清场
+  ZOMBIE_HP_MULT: 2.0,
 });
 
-// 生化模式丧尸加速技能（F 键）
-export const ZOMBIE_BOOST_SPEED = 8.0;
-export const ZOMBIE_BOOST_DURATION = 3;
-export const ZOMBIE_BOOST_COOLDOWN = 20;
-
-// 回血箱每次回复量（人类在生化模式中使用）
+export const ZOMBIE_BOOST_SPEED = 8.2;
+export const ZOMBIE_BOOST_DURATION = 3.2;
+export const ZOMBIE_BOOST_COOLDOWN = 18;
 export const HEALTH_BOX_HEAL = 100;
-
 export const INPUT_MAX_HISTORY = 64;
-// VibeHub 规范：实时快照频率 15-20Hz。模拟仍在 30Hz 固定步长运行（TICK_RATE），
-// 快照每 50ms 广播一次（20Hz），控制 P2P 带宽；客户端以 50ms 缓冲 + 100ms 插值窗口渲染。
 export const SNAPSHOT_INTERVAL_MS = 1000 / 20;
