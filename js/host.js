@@ -10,7 +10,7 @@ import { weaponPrice } from '../shared/economy.js';
 import { MODES, modeCfg } from '../shared/modes.js';
 
 const MODE_LABEL = Object.fromEntries(Object.values(MODES).map((m) => [m.id, m.label]));
-const DEFAULT_MAP = { defusal: 'vertex', zombie: 'containment', tdm: 'pit', gungame: 'pit' };
+const DEFAULT_MAP = { defusal: 'citadel', zombie: 'metro', tdm: 'pit', gungame: 'foundry', ffa: 'sanctum', sniper: 'sanctum', koth: 'sanctum' };
 
 export class Host {
   constructor(net) {
@@ -20,13 +20,14 @@ export class Host {
     this.lastInputAt = new Map();  // peerId -> 上次输入时间戳（节流）
   }
 
-  async init({ name, mode, team, bots, botSkill }) {
+  async init({ name, mode, team, mapId, bots, botSkill }) {
     const m = MODES[mode] ? mode : 'defusal';
     const botCount = Number.isFinite(+bots) ? Math.max(0, Math.min(10, +bots)) : CONFIG.bots;
+    const chosenMap = mapId && mapId !== 'auto' ? mapId : (DEFAULT_MAP[m] || 'vertex');
     const room = new Room({
       id: this.net.offline ? 'offline' : 'p2p',
       mode: m,
-      mapId: DEFAULT_MAP[m] || 'vertex',
+      mapId: chosenMap,
       maxPlayers: CONFIG.maxPlayers,
       botCount,
       botSkill: Number.isFinite(+botSkill) ? +botSkill : CONFIG.botSkill,
@@ -107,7 +108,7 @@ export class Host {
         const p = this.playerFor(fromId);
         if (!p) return;
         this.room.handleModMessage(p.id, {
-          type: String(msg.type || '').slice(0, 40),
+          type: String(msg.modType || msg.type || '').slice(0, 40),
           payload: msg.payload ?? {},
         });
         break;

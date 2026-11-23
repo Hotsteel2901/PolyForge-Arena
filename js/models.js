@@ -1,10 +1,11 @@
-// 程序化建模：玩家、第一人称枪械、道具、炸弹、弹药箱、贴图。零外部资产。
+// 程序化精细建模（Ultra Edition）：角色（已彻底纠正面朝为 -Z）、高精细第一人称枪械、
+// 战术爪刃匕首、修复并重做的双持异变尸爪、精细化地图道具与补给箱。零外部资产。
 
 import * as THREE from 'three';
 
 const matCache = new Map();
 export function mat(color, opts = {}) {
-  const key = `${color}|${opts.metalness ?? 0.2}|${opts.roughness ?? 0.75}|${opts.emissive ?? 0}`;
+  const key = `${color}|${opts.metalness ?? 0.2}|${opts.roughness ?? 0.75}|${opts.emissive ?? 0}|${opts.emissiveIntensity ?? 1}|${opts.transparent ? 1 : 0}|${opts.opacity ?? 1}`;
   if (!matCache.has(key)) {
     matCache.set(key, new THREE.MeshStandardMaterial({
       color,
@@ -12,6 +13,8 @@ export function mat(color, opts = {}) {
       roughness: opts.roughness ?? 0.75,
       emissive: opts.emissive ? new THREE.Color(opts.emissive) : 0x000000,
       emissiveIntensity: opts.emissiveIntensity ?? 1,
+      transparent: !!opts.transparent,
+      opacity: opts.opacity ?? 1,
     }));
   }
   return matCache.get(key);
@@ -28,118 +31,146 @@ function add(parent, geo, material, x, y, z, rx = 0, ry = 0, rz = 0) {
 }
 
 const B = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+const C = (rt, rb, h, seg = 10) => new THREE.CylinderGeometry(rt, rb, h, seg);
 
-// ---------------- 玩家模型 ----------------
-// 结构：root(脚底) → 腿组(髋部为轴) / 躯干组 / 手臂组(肩部为轴) / 头部组(颈部为轴)
-// 每个可动部位都是独立 Group，动画只需改 group.rotation，不需要重建几何。
-// 站立总高约 1.78m，与 PHYS.STAND_H=1.8 对齐（下蹲时由客户端整体 squash 到 1.2m）。
+// ---------------- 玩家模型（统一严格朝向 -Z，与相机和 yaw=0 完全一致！） ----------------
 export function buildPlayer({ zombie = false, team = 1 } = {}) {
   const root = new THREE.Group();
-  const skin = zombie ? 0x93a86b : 0xd8a06a;
-  const suit = zombie ? 0x4c6330 : team === 1 ? 0x1f5aa0 : 0x9c3a1d;
-  const suitDark = zombie ? 0x37491f : team === 1 ? 0x173f70 : 0x6d2814;
-  const trim = zombie ? 0x8fbf5a : team === 1 ? 0x8fd6ff : 0xffb066;
-  const dark = zombie ? 0x2f3d1e : 0x232a32;
+  // 所有身体构件装入 rig，整体旋转 PI 让原 +Z 正面严格对齐到 -Z 前方；
+  // 这样无论跑步摆腿、持枪瞄准、头盔护目镜、丧尸扑击，朝向与移动方向 100% 吻合。
+  const rig = new THREE.Group();
+  rig.rotation.y = Math.PI;
+  root.add(rig);
+
+  const skin = zombie ? 0x7b9656 : 0xd8a06a;
+  const suit = zombie ? 0x3f5427 : team === 1 ? 0x1d5ca8 : 0xa63c1e;
+  const suitDark = zombie ? 0x2b3b18 : team === 1 ? 0x143b6e : 0x6d2511;
+  const trim = zombie ? 0xa3e65c : team === 1 ? 0x62d4ff : 0xffaa4c;
+  const dark = zombie ? 0x222c17 : 0x1e252e;
+  const metalMat = mat(0x5d6875, { metalness: 0.5, roughness: 0.4 });
   const parts = {};
 
-  const legGeo = { thigh: B(0.16, 0.42, 0.18), shin: B(0.14, 0.38, 0.16), boot: B(0.16, 0.12, 0.26) };
+  const legGeo = { thigh: B(0.165, 0.42, 0.185), shin: B(0.145, 0.38, 0.165), boot: B(0.165, 0.125, 0.27) };
   for (const [side, key] of [[-1, 'legL'], [1, 'legR']]) {
     const leg = new THREE.Group();
     leg.position.set(side * 0.115, 0.86, 0);
     add(leg, legGeo.thigh, mat(suitDark), 0, -0.21, 0);
+    // 战术腿袋
+    add(leg, B(0.04, 0.16, 0.11), mat(dark), side * 0.09, -0.22, 0.01);
     add(leg, legGeo.shin, mat(suit), 0, -0.60, 0);
-    add(leg, legGeo.boot, mat(dark), 0, -0.82, -0.03);
-    // 护膝
-    add(leg, B(0.15, 0.09, 0.15), mat(trim, { roughness: 0.5 }), 0, -0.40, 0.02);
-    root.add(leg);
+    // 靴子严格朝向正面 (+Z in rig = -Z in world)
+    add(leg, legGeo.boot, mat(dark), 0, -0.82, 0.045);
+    add(leg, B(0.155, 0.04, 0.09), metalMat, 0, -0.84, 0.16);
+    // 战术护膝
+    add(leg, B(0.155, 0.10, 0.14), mat(trim, { roughness: 0.45 }), 0, -0.40, 0.035);
+    rig.add(leg);
     parts[key] = leg;
   }
 
   const torso = new THREE.Group();
   torso.position.set(0, 0.86, 0);
   add(torso, B(0.42, 0.48, 0.24), mat(suit), 0, 0.24, 0);
-  // 战术背心 + 弹匣袋
-  add(torso, B(0.44, 0.30, 0.27), mat(suitDark, { roughness: 0.65 }), 0, 0.28, 0.005);
-  add(torso, B(0.30, 0.10, 0.06), mat(dark), 0, 0.22, 0.15);
-  add(torso, B(0.10, 0.10, 0.05), mat(trim, { roughness: 0.5 }), -0.12, 0.36, 0.15);
-  add(torso, B(0.42, 0.06, 0.25), mat(dark), 0, 0.03, 0);
-  // 背包
-  add(torso, B(0.28, 0.30, 0.15), mat(dark, { roughness: 0.7 }), 0, 0.26, -0.19);
-  add(torso, B(0.06, 0.34, 0.02), mat(trim, { roughness: 0.5 }), 0, 0.26, -0.27);
+  // 战术防弹插板背心 + 三联弹匣袋
+  add(torso, B(0.45, 0.32, 0.28), mat(suitDark, { roughness: 0.6 }), 0, 0.28, 0.008);
+  for (let i = -1; i <= 1; i++) {
+    add(torso, B(0.085, 0.12, 0.065), mat(dark), i * 0.105, 0.21, 0.155);
+  }
+  // 胸前发光阵营标识条
+  add(torso, B(0.14, 0.045, 0.03), mat(trim, { emissive: trim, emissiveIntensity: 1.5, roughness: 0.3 }), -0.11, 0.37, 0.15);
+  add(torso, B(0.43, 0.065, 0.26), mat(dark), 0, 0.03, 0);
+  // 战术背包 + 通信天线
+  add(torso, B(0.29, 0.32, 0.16), mat(dark, { roughness: 0.68 }), 0, 0.27, -0.19);
+  add(torso, B(0.06, 0.34, 0.025), mat(trim, { emissive: trim, emissiveIntensity: 0.9 }), 0, 0.27, -0.275);
+  if (!zombie) {
+    add(torso, C(0.008, 0.012, 0.34, 6), metalMat, -0.11, 0.56, -0.19);
+  } else {
+    // 丧尸背部暴露骨刺
+    const bone = mat(0xd8cfb8, { roughness: 0.55 });
+    for (let i = 0; i < 3; i++) {
+      add(torso, new THREE.ConeGeometry(0.025, 0.11, 5), bone, 0, 0.16 + i * 0.11, -0.26, -Math.PI * 0.4, 0, 0);
+    }
+  }
   // 颈部
-  add(torso, new THREE.CylinderGeometry(0.055, 0.06, 0.09, 8), mat(skin), 0, 0.50, 0);
-  root.add(torso);
+  add(torso, C(0.055, 0.062, 0.09, 8), mat(skin), 0, 0.50, 0);
+  rig.add(torso);
   parts.torso = torso;
 
   const head = new THREE.Group();
   head.position.set(0, 1.36, 0);
   add(head, new THREE.SphereGeometry(0.155, 14, 12), mat(skin), 0, 0.13, 0);
-  // 头盔：半球壳 + 前沿
-  add(head, new THREE.SphereGeometry(0.175, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.62), mat(zombie ? 0x3b4a26 : suitDark, { roughness: 0.55 }), 0, 0.14, 0);
-  // 面罩 / 护目镜
-  add(head, B(0.26, 0.075, 0.04), mat(zombie ? 0x241c10 : 0x101820, { metalness: 0.6, roughness: 0.25 }), 0, 0.14, 0.16);
-  add(head, B(0.24, 0.05, 0.05), mat(skin), 0, 0.05, 0.14);
+  // 战术头盔 + 侧导轨 + 夜视仪支架
+  add(head, new THREE.SphereGeometry(0.178, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.62), mat(zombie ? 0x364720 : suitDark, { roughness: 0.5 }), 0, 0.14, 0);
+  add(head, B(0.27, 0.078, 0.045), mat(zombie ? 0x1e160d : 0x0c1622, { metalness: 0.65, roughness: 0.2 }), 0, 0.14, 0.155);
+  add(head, B(0.24, 0.05, 0.05), mat(skin), 0, 0.05, 0.135);
   if (zombie) {
-    const eye = new THREE.MeshStandardMaterial({ color: 0xff3a20, emissive: 0xff2a10, emissiveIntensity: 2.6 });
-    add(head, new THREE.SphereGeometry(0.026, 6, 6), eye, 0.06, 0.155, 0.165);
-    add(head, new THREE.SphereGeometry(0.026, 6, 6), eye, -0.06, 0.155, 0.165);
-    // 撕裂的布条
-    add(head, B(0.2, 0.06, 0.06), mat(0x6a2a22, { roughness: 0.9 }), 0, -0.02, 0.1);
+    const eye = new THREE.MeshStandardMaterial({ color: 0xff3a20, emissive: 0xff2200, emissiveIntensity: 3.0 });
+    add(head, new THREE.SphereGeometry(0.028, 6, 6), eye, 0.058, 0.152, 0.165);
+    add(head, new THREE.SphereGeometry(0.028, 6, 6), eye, -0.058, 0.152, 0.165);
+    add(head, B(0.20, 0.055, 0.06), mat(0x6e1f18, { roughness: 0.85 }), 0, -0.015, 0.105);
   } else {
-    // 队伍识别：头盔侧徽
-    add(head, B(0.04, 0.06, 0.10), mat(trim, { roughness: 0.45 }), 0.16, 0.16, 0);
-    add(head, B(0.04, 0.06, 0.10), mat(trim, { roughness: 0.45 }), -0.16, 0.16, 0);
+    // 头盔发光侧徽 + 前额战术镜架
+    add(head, B(0.04, 0.055, 0.11), mat(trim, { emissive: trim, emissiveIntensity: 1.4 }), 0.165, 0.16, 0);
+    add(head, B(0.04, 0.055, 0.11), mat(trim, { emissive: trim, emissiveIntensity: 1.4 }), -0.165, 0.16, 0);
+    add(head, B(0.07, 0.04, 0.045), metalMat, 0, 0.24, 0.15);
   }
-  root.add(head);
+  rig.add(head);
   parts.head = head;
 
-  const gunMat = mat(0x4a525c, { metalness: 0.4, roughness: 0.45 });
+  const gunMat = mat(0x3f4854, { metalness: 0.5, roughness: 0.4 });
   for (const [side, key] of [[-1, 'armL'], [1, 'armR']]) {
     const arm = new THREE.Group();
-    arm.position.set(side * 0.255, 1.28, 0);
-    add(arm, B(0.12, 0.26, 0.13), mat(suit), 0, -0.13, 0);
-    add(arm, B(0.11, 0.24, 0.12), mat(suitDark), 0, -0.36, 0);
-    add(arm, B(0.10, 0.10, 0.11), mat(skin), 0, -0.50, 0);
-    // 肩甲
-    add(arm, B(0.15, 0.09, 0.17), mat(trim, { roughness: 0.5 }), side * 0.02, 0.02, 0);
-    root.add(arm);
+    arm.position.set(side * 0.26, 1.28, 0);
+    add(arm, B(0.125, 0.26, 0.135), mat(suit), 0, -0.13, 0);
+    add(arm, B(0.112, 0.24, 0.122), mat(suitDark), 0, -0.36, 0);
+    add(arm, B(0.102, 0.102, 0.112), mat(zombie ? skin : dark), 0, -0.50, 0);
+    // 装甲肩垫 + 阵营色条
+    add(arm, B(0.16, 0.095, 0.18), mat(trim, { roughness: 0.45 }), side * 0.025, 0.02, 0);
+    rig.add(arm);
     parts[key] = arm;
   }
 
   if (zombie) {
-    const clawMat = mat(0xe8e0d0, { roughness: 0.5 });
+    const clawMat = mat(0xe6dcc8, { roughness: 0.35, metalness: 0.15 });
+    const bloodTip = mat(0x9e1818, { emissive: 0x550808, emissiveIntensity: 0.8 });
     for (const key of ['armL', 'armR']) {
       const arm = parts[key];
       const side = key === 'armR' ? 1 : -1;
       for (let i = -1; i <= 1; i++) {
-        const claw = new THREE.Mesh(new THREE.ConeGeometry(0.017, 0.13, 5), clawMat);
-        claw.position.set(i * 0.038, -0.58, 0.02);
-        claw.rotation.x = Math.PI * 0.92;
-        claw.rotation.z = i * 0.16;
+        // 爪尖沿手臂末端 (-Y) 向下前伸，双臂抬起后严格指向前方！
+        const claw = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.18, 5), clawMat);
+        claw.position.set(i * 0.036, -0.60, 0.03);
+        claw.rotation.x = Math.PI + 0.22;
+        claw.rotation.z = i * 0.15;
         arm.add(claw);
+        const tip = new THREE.Mesh(new THREE.ConeGeometry(0.011, 0.07, 5), bloodTip);
+        tip.position.set(i * 0.036, -0.68, 0.048);
+        tip.rotation.x = Math.PI + 0.25;
+        arm.add(tip);
       }
       arm.userData.side = side;
     }
-    // 丧尸：前倾含胸、双臂前伸下垂
-    torso.rotation.x = 0.16;
+    torso.rotation.x = 0.18;
     parts.armL.rotation.x = -1.32;
     parts.armR.rotation.x = -1.36;
     parts.armL.rotation.z = 0.07;
     parts.armR.rotation.z = -0.07;
     head.rotation.x = 0.12;
   } else {
-    // 人类：双手持枪姿态（左手上护木、右手握把），枪挂在躯干上随身体移动
     parts.armR.rotation.x = -1.28;
     parts.armR.rotation.z = -0.12;
     parts.armL.rotation.x = -1.34;
     parts.armL.rotation.z = 0.30;
+    // 第三人称步枪：严格指向 rig +Z（即世界前方 -Z！）
     const gun = new THREE.Group();
-    gun.position.set(0.06, 1.16, 0.30);
-    add(gun, B(0.07, 0.09, 0.46), gunMat, 0, 0, 0);
-    add(gun, B(0.05, 0.14, 0.10), mat(0x1b2026), 0, -0.07, 0.06);
-    add(gun, B(0.04, 0.10, 0.09), mat(0x1b2026), 0, -0.05, -0.16);
-    add(gun, new THREE.CylinderGeometry(0.017, 0.017, 0.16, 8), gunMat, 0, 0.01, -0.30, Math.PI / 2, 0, 0);
-    root.add(gun);
+    gun.position.set(0.06, 1.15, 0.32);
+    add(gun, B(0.072, 0.095, 0.46), gunMat, 0, 0, 0);
+    add(gun, B(0.052, 0.15, 0.095), mat(0x1b2026), 0, -0.08, 0.07, 0.16);
+    add(gun, B(0.045, 0.11, 0.08), mat(0x1b2026), 0, -0.055, -0.14);
+    // 枪管严格朝前 (+0.32 in rig = -Z in world)
+    add(gun, C(0.017, 0.017, 0.24, 8), gunMat, 0, 0.015, 0.31, Math.PI / 2, 0, 0);
+    // 顶部光学瞄具
+    add(gun, B(0.042, 0.048, 0.12), mat(0x1b2026), 0, 0.07, 0.02);
+    rig.add(gun);
     parts.gun = gun;
   }
 
@@ -151,179 +182,318 @@ export function buildPlayer({ zombie = false, team = 1 } = {}) {
   return root;
 }
 
-// ---------------- 第一人称枪械 ----------------
+// ---------------- 第一人称极致精细枪械 / 匕首 / 双持异变尸爪 ----------------
 export function buildViewmodel(id) {
   const g = new THREE.Group();
-  // 金属件不要把 metalness 拉满：没有环境贴图的设备上（低端 GPU / 关闭画质）
-  // 纯金属材质只剩镜面反射，会渲染成一块死黑，枪在手里完全看不出结构。
-  const metal = mat(0x707a86, { metalness: 0.45, roughness: 0.42 });
-  const dark = mat(0x3b424b, { metalness: 0.3, roughness: 0.6 });
-  const grip = mat(0x3a2c20, { metalness: 0.1, roughness: 0.85 });
-  const accent = mat(0x8f4a28, { metalness: 0.3, roughness: 0.55 });
+  const metal = mat(0x768290, { metalness: 0.48, roughness: 0.38 });
+  const gunmetal = mat(0x4c5664, { metalness: 0.52, roughness: 0.36 });
+  const dark = mat(0x2a313a, { metalness: 0.32, roughness: 0.56 });
+  const polymer = mat(0x23272e, { metalness: 0.12, roughness: 0.78 });
+  const grip = mat(0x2b241e, { metalness: 0.1, roughness: 0.86 });
+  const accent = mat(0x9e522b, { metalness: 0.32, roughness: 0.5 });
+  const railMat = mat(0x3a424d, { metalness: 0.45, roughness: 0.45 });
+  const redDot = mat(0xff3838, { emissive: 0xff2222, emissiveIntensity: 2.6 });
+  const cyanGlow = mat(0x42e4ff, { emissive: 0x1ac8ff, emissiveIntensity: 2.6 });
+  const greenDot = mat(0x38ff7a, { emissive: 0x22e866, emissiveIntensity: 2.4 });
   const muzzle = new THREE.Object3D();
-  muzzle.position.set(0, 0.02, -0.52);
+  muzzle.position.set(0, 0.02, -0.54);
+
+  // 辅助：皮卡汀尼战术导轨齿
+  const addRail = (zStart, zEnd, y, width = 0.036) => {
+    const len = Math.abs(zEnd - zStart);
+    const mid = (zStart + zEnd) / 2;
+    add(g, B(width, 0.012, len), railMat, 0, y, mid);
+    const steps = Math.max(2, Math.floor(len / 0.032));
+    for (let i = 0; i < steps; i++) {
+      const z = zStart - (i + 0.5) * (len / steps);
+      add(g, B(width + 0.004, 0.008, 0.012), dark, 0, y + 0.008, z);
+    }
+  };
 
   switch (id) {
     case 'k9': {
-      add(g, B(0.08, 0.11, 0.24), metal, 0, 0, 0);
-      add(g, new THREE.CylinderGeometry(0.028, 0.028, 0.14, 10), dark, 0, 0.03, -0.18, Math.PI / 2, 0, 0);
-      add(g, B(0.09, 0.14, 0.05), grip, 0.005, -0.12, 0.06, 0.22);
-      add(g, B(0.09, 0.05, 0.12), dark, 0, 0.07, 0.12);
-      add(g, B(0.03, 0.03, 0.03), metal, 0, 0.04, 0.16);
-      muzzle.position.z = -0.3;
+      // K9 战术微声手枪：双色套筒 + 消音器 + 底部战术激光 + 氚光机械瞄具
+      add(g, B(0.068, 0.088, 0.25), metal, 0, 0.015, -0.01);
+      add(g, B(0.062, 0.042, 0.24), polymer, 0, -0.035, 0.0);
+      // 抛壳窗与防滑锯齿
+      add(g, B(0.072, 0.032, 0.065), dark, 0.003, 0.028, 0.0);
+      // 战术消音管
+      add(g, C(0.022, 0.022, 0.19, 12), dark, 0, 0.024, -0.22, Math.PI / 2, 0, 0);
+      add(g, C(0.025, 0.025, 0.018, 12), gunmetal, 0, 0.024, -0.14, Math.PI / 2, 0, 0);
+      // 下挂激光模块
+      add(g, B(0.036, 0.032, 0.085), dark, 0, -0.055, -0.09);
+      add(g, C(0.008, 0.008, 0.012, 8), redDot, 0, -0.055, -0.135, Math.PI / 2, 0, 0);
+      // 握把 + 延长弹匣底板
+      add(g, B(0.058, 0.145, 0.064), grip, 0, -0.115, 0.065, 0.22);
+      add(g, B(0.054, 0.026, 0.07), gunmetal, 0, -0.19, 0.085, 0.22);
+      // 三点氚光瞄具
+      add(g, B(0.012, 0.018, 0.016), greenDot, -0.018, 0.068, 0.095);
+      add(g, B(0.012, 0.018, 0.016), greenDot, 0.018, 0.068, 0.095);
+      add(g, B(0.01, 0.02, 0.014), redDot, 0, 0.068, -0.12);
+      muzzle.position.set(0, 0.024, -0.33);
       break;
     }
     case 'vx9': {
-      add(g, B(0.09, 0.13, 0.36), metal, 0, 0.01, 0.04);
-      add(g, B(0.07, 0.09, 0.2), dark, 0, 0.01, -0.22);
-      add(g, new THREE.CylinderGeometry(0.025, 0.025, 0.22, 10), dark, 0, 0.01, -0.34, Math.PI / 2, 0, 0);
-      add(g, B(0.08, 0.17, 0.07), grip, 0, -0.13, 0.13, -0.16);
-      add(g, B(0.08, 0.18, 0.06), grip, 0, -0.13, -0.05, -0.18);
-      add(g, B(0.09, 0.12, 0.14), dark, 0, -0.07, 0.14, 0.14);
-      add(g, B(0.05, 0.05, 0.06), accent, 0, 0.06, 0.2);
-      muzzle.position.z = -0.46;
+      // VX9 极速冲锋枪：紧凑聚合物机匣 + 镂空护木 + 倾斜延长弹匣 + 微型全息镜 + 侧激光
+      add(g, B(0.082, 0.118, 0.34), gunmetal, 0, 0.015, 0.02);
+      add(g, B(0.072, 0.088, 0.20), polymer, 0, 0.012, -0.22);
+      // 护木散热槽
+      for (let i = 0; i < 4; i++) add(g, B(0.076, 0.018, 0.022), dark, 0, 0.016, -0.15 - i * 0.042);
+      // 短枪管 + 制退器
+      add(g, C(0.020, 0.020, 0.16, 10), dark, 0, 0.018, -0.36, Math.PI / 2, 0, 0);
+      add(g, C(0.026, 0.024, 0.05, 10), metal, 0, 0.018, -0.44, Math.PI / 2, 0, 0);
+      // 倾斜加长弹匣 + 握把 + 折叠托
+      add(g, B(0.052, 0.22, 0.056), dark, 0, -0.14, -0.07, -0.22);
+      add(g, B(0.056, 0.022, 0.062), accent, 0, -0.245, -0.095, -0.22);
+      add(g, B(0.062, 0.155, 0.064), grip, 0, -0.115, 0.115, 0.2);
+      add(g, B(0.05, 0.09, 0.14), polymer, 0, -0.02, 0.22);
+      // 顶部导轨 + 反射式红点镜
+      addRail(0.14, -0.26, 0.078, 0.038);
+      add(g, B(0.058, 0.056, 0.075), dark, 0, 0.11, 0.04);
+      add(g, B(0.044, 0.04, 0.01), mat(0x70d8ff, { transparent: true, opacity: 0.35 }), 0, 0.114, 0.04);
+      add(g, B(0.009, 0.009, 0.012), redDot, 0, 0.114, 0.04);
+      // 侧面战术激光盒
+      add(g, B(0.032, 0.034, 0.08), dark, 0.052, 0.02, -0.20);
+      add(g, C(0.007, 0.007, 0.012, 8), cyanGlow, 0.052, 0.02, -0.242, Math.PI / 2, 0, 0);
+      muzzle.position.set(0, 0.018, -0.48);
       break;
     }
     case 'arc17': {
-      add(g, B(0.09, 0.14, 0.4), metal, 0, 0.02, 0.02);
-      add(g, B(0.08, 0.1, 0.18), dark, 0, 0.02, -0.26);
-      add(g, new THREE.CylinderGeometry(0.022, 0.022, 0.24, 10), dark, 0, 0.03, -0.38, Math.PI / 2, 0, 0);
-      add(g, B(0.09, 0.16, 0.07), grip, 0, -0.14, 0.1, -0.14);
-      add(g, B(0.08, 0.2, 0.06), grip, 0, -0.16, -0.12, -0.14);
-      add(g, B(0.08, 0.1, 0.08), grip, 0, -0.12, 0.2, 0.18);
-      add(g, B(0.1, 0.08, 0.14), dark, 0, 0.02, -0.14);
-      add(g, B(0.05, 0.09, 0.08), dark, 0, 0.06, 0.16);
-      add(g, B(0.03, 0.02, 0.03), mat(0x33dd66, { emissive: 0x33dd66, emissiveIntensity: 2 }), 0, 0.085, 0.19);
-      muzzle.position.z = -0.52;
+      // ARC-17 突击步枪：精密铣削上下机匣 + 战术浮置护木 + 弯弹匣 + 斜握把 + ACOG 光学瞄具
+      add(g, B(0.084, 0.125, 0.38), gunmetal, 0, 0.018, 0.02);
+      add(g, B(0.072, 0.092, 0.28), dark, 0, 0.022, -0.28);
+      // 导气管 + 精密枪管 + 三叉消焰器
+      add(g, C(0.012, 0.012, 0.22, 8), metal, 0, 0.055, -0.32, Math.PI / 2, 0, 0);
+      add(g, C(0.019, 0.019, 0.24, 10), gunmetal, 0, 0.024, -0.46, Math.PI / 2, 0, 0);
+      add(g, C(0.026, 0.022, 0.055, 8), dark, 0, 0.024, -0.58, Math.PI / 2, 0, 0);
+      // 分段弯弹匣
+      add(g, B(0.054, 0.13, 0.075), dark, 0, -0.10, -0.09, 0.12);
+      add(g, B(0.052, 0.11, 0.072), dark, 0, -0.20, -0.115, 0.28);
+      add(g, B(0.056, 0.018, 0.076), accent, 0, -0.25, -0.132, 0.28);
+      // 手枪握把 + 前斜握把 + 伸缩托
+      add(g, B(0.062, 0.155, 0.068), grip, 0, -0.115, 0.115, 0.22);
+      add(g, B(0.048, 0.09, 0.048), polymer, 0, -0.065, -0.24, -0.32);
+      add(g, B(0.068, 0.11, 0.18), polymer, 0, -0.01, 0.26);
+      // 顶部全长皮轨 + 全息战术镜
+      addRail(0.18, -0.38, 0.084, 0.04);
+      add(g, C(0.028, 0.032, 0.15, 12), dark, 0, 0.124, 0.03, Math.PI / 2, 0, 0);
+      add(g, C(0.024, 0.024, 0.01, 10), mat(0x5ad7ff, { transparent: true, opacity: 0.45 }), 0, 0.124, -0.045, Math.PI / 2, 0, 0);
+      add(g, B(0.01, 0.01, 0.012), greenDot, 0, 0.124, 0.08);
+      muzzle.position.set(0, 0.024, -0.62);
       break;
     }
     case 'warden': {
-      add(g, B(0.1, 0.13, 0.34), metal, 0, 0.02, 0.02);
-      add(g, B(0.08, 0.09, 0.3), accent, 0, 0, -0.28);
-      add(g, new THREE.CylinderGeometry(0.026, 0.026, 0.36, 10), dark, 0, 0.03, -0.34, Math.PI / 2, 0, 0);
-      add(g, B(0.09, 0.17, 0.07), grip, 0, -0.14, 0.1, -0.14);
-      add(g, B(0.09, 0.16, 0.05), grip, 0, -0.15, -0.18, -0.14);
-      add(g, B(0.07, 0.11, 0.08), dark, 0, -0.06, 0.16, 0.16);
-      add(g, B(0.04, 0.04, 0.2), metal, 0, 0.055, -0.16);
-      muzzle.position.z = -0.54;
+      // Warden 破门霰弹枪：重型机匣 + 双管（枪管+下弹仓管）+ 橘红防滑泵动护木 + 侧挂备用弹壳 + 鬼环瞄具
+      add(g, B(0.095, 0.125, 0.34), gunmetal, 0, 0.015, 0.02);
+      // 枪管 + 弹仓管 + 枪口破门锯齿
+      add(g, C(0.024, 0.024, 0.44, 12), dark, 0, 0.045, -0.34, Math.PI / 2, 0, 0);
+      add(g, C(0.021, 0.021, 0.38, 12), metal, 0, -0.005, -0.31, Math.PI / 2, 0, 0);
+      add(g, C(0.031, 0.028, 0.055, 8), metal, 0, 0.045, -0.56, Math.PI / 2, 0, 0);
+      // 橘红战术泵动护木
+      add(g, B(0.086, 0.078, 0.22), accent, 0, -0.01, -0.26);
+      for (let i = 0; i < 5; i++) add(g, B(0.09, 0.082, 0.012), dark, 0, -0.01, -0.18 - i * 0.038);
+      // 机匣左侧 4 发红铜霰弹弹壳架
+      const shellRed = mat(0xc82820, { roughness: 0.4 });
+      const brass = mat(0xd8a83a, { metalness: 0.7, roughness: 0.3 });
+      for (let i = 0; i < 4; i++) {
+        add(g, C(0.011, 0.011, 0.052, 8), shellRed, -0.058, 0.022, 0.06 - i * 0.034);
+        add(g, C(0.0115, 0.0115, 0.016, 8), brass, -0.058, -0.008, 0.06 - i * 0.034);
+      }
+      // 握把 + 顶部导轨 + 鬼环照门
+      add(g, B(0.068, 0.16, 0.072), grip, 0, -0.115, 0.13, 0.26);
+      addRail(0.14, -0.12, 0.082, 0.042);
+      add(g, new THREE.TorusGeometry(0.022, 0.005, 8, 14), dark, 0, 0.112, 0.10);
+      add(g, B(0.01, 0.022, 0.014), redDot, 0, 0.082, -0.52);
+      muzzle.position.set(0, 0.045, -0.60);
       break;
     }
     case 'longshot': {
-      add(g, B(0.08, 0.13, 0.36), metal, 0, 0.02, 0.05);
-      add(g, new THREE.CylinderGeometry(0.02, 0.02, 0.62, 10), dark, 0, 0.03, -0.42, Math.PI / 2, 0, 0);
-      add(g, new THREE.CylinderGeometry(0.032, 0.032, 0.2, 10), metal, 0, 0.08, 0, Math.PI / 2, 0, 0);
-      add(g, new THREE.SphereGeometry(0.035, 10, 8), mat(0x9fd8ff, { metalness: 0.1, roughness: 0.1 }), 0, 0.08, -0.05);
-      add(g, B(0.08, 0.16, 0.07), grip, 0, -0.14, 0.12, -0.16);
-      add(g, B(0.07, 0.12, 0.08), grip, 0, -0.13, -0.18, -0.12);
-      muzzle.position.z = -0.74;
+      // Longshot 反器材狙击步枪：精密悬浮长枪管 + 双腔制退器 + 高倍瞄准镜 + 侧置拉机柄 + 折叠两脚架
+      add(g, B(0.082, 0.12, 0.38), gunmetal, 0, 0.015, 0.04);
+      add(g, B(0.074, 0.086, 0.24), polymer, 0, 0.012, -0.22);
+      // 超长重型枪管 + 宽体双腔制退器
+      add(g, C(0.019, 0.022, 0.64, 12), dark, 0, 0.032, -0.44, Math.PI / 2, 0, 0);
+      add(g, B(0.058, 0.044, 0.095), metal, 0, 0.032, -0.77);
+      // 折叠两脚架
+      add(g, C(0.009, 0.009, 0.16, 8), metal, -0.045, -0.04, -0.34, 0.4, 0, 0.2);
+      add(g, C(0.009, 0.009, 0.16, 8), metal, 0.045, -0.04, -0.34, 0.4, 0, -0.2);
+      // 高倍狙击瞄准镜（双镜环 + 目镜 + 大物镜 + 调节旋钮）
+      addRail(0.16, -0.16, 0.078, 0.038);
+      add(g, C(0.026, 0.026, 0.26, 14), dark, 0, 0.13, -0.02, Math.PI / 2, 0, 0);
+      add(g, C(0.036, 0.028, 0.08, 14), gunmetal, 0, 0.13, -0.16, Math.PI / 2, 0, 0);
+      add(g, C(0.032, 0.026, 0.06, 14), gunmetal, 0, 0.13, 0.12, Math.PI / 2, 0, 0);
+      add(g, C(0.03, 0.03, 0.008, 12), mat(0x70c8ff, { emissive: 0x1a5a8a, emissiveIntensity: 0.7 }), 0, 0.13, 0.15, Math.PI / 2, 0, 0);
+      add(g, C(0.012, 0.012, 0.028, 8), metal, 0, 0.162, -0.02);
+      // 右侧拉机柄 + 大口径弹匣 + 握把
+      add(g, C(0.008, 0.008, 0.06, 8), metal, 0.065, 0.02, 0.06, 0, 0, Math.PI / 2);
+      add(g, new THREE.SphereGeometry(0.016, 8, 8), dark, 0.095, 0.02, 0.06);
+      add(g, B(0.06, 0.13, 0.095), dark, 0, -0.10, -0.06);
+      add(g, B(0.062, 0.155, 0.068), grip, 0, -0.115, 0.13, 0.2);
+      muzzle.position.set(0, 0.032, -0.82);
       break;
     }
     case 'bruiser': {
-      add(g, B(0.1, 0.15, 0.42), metal, 0, 0.02, 0.02);
-      add(g, B(0.09, 0.1, 0.16), dark, 0, 0.02, -0.26);
-      add(g, new THREE.CylinderGeometry(0.022, 0.022, 0.24, 10), dark, 0, 0.04, -0.38, Math.PI / 2, 0, 0);
-      add(g, new THREE.CylinderGeometry(0.065, 0.065, 0.09, 12), mat(0x8a6a3a), 0, -0.08, 0.04, Math.PI / 2, 0, 0);
-      add(g, B(0.09, 0.17, 0.07), grip, 0, -0.14, 0.1, -0.14);
-      add(g, B(0.07, 0.08, 0.16), dark, 0, 0.02, -0.06);
-      muzzle.position.z = -0.52;
+      // Bruiser 压制轻机枪：宽体机匣 + 120发弹鼓 + 散热穿孔枪管护罩 + 提把 + 弹链盒
+      add(g, B(0.105, 0.145, 0.42), gunmetal, 0, 0.02, 0.02);
+      add(g, B(0.088, 0.096, 0.24), dark, 0, 0.025, -0.28);
+      // 散热穿孔枪管 + 重型消焰器
+      add(g, C(0.024, 0.024, 0.34, 12), dark, 0, 0.038, -0.44, Math.PI / 2, 0, 0);
+      add(g, C(0.032, 0.032, 0.18, 12), metal, 0, 0.038, -0.34, Math.PI / 2, 0, 0);
+      // 120发双侧大型战术弹鼓 + 黄铜弹链
+      add(g, C(0.078, 0.078, 0.11, 16), mat(0x525c42, { roughness: 0.6 }), 0, -0.095, -0.05, Math.PI / 2, 0, 0);
+      const brass = mat(0xd8a83a, { metalness: 0.72, roughness: 0.28 });
+      for (let i = 0; i < 4; i++) add(g, C(0.008, 0.008, 0.045, 6), brass, -0.058, -0.015 - i * 0.018, -0.04, 0, 0, Math.PI / 2);
+      // 顶部战术提把 + 全息准镜
+      add(g, B(0.032, 0.02, 0.18), dark, 0, 0.135, -0.08);
+      add(g, B(0.024, 0.05, 0.024), dark, 0, 0.11, -0.15);
+      add(g, B(0.024, 0.05, 0.024), dark, 0, 0.11, -0.01);
+      add(g, B(0.06, 0.052, 0.075), dark, 0, 0.115, 0.12);
+      add(g, B(0.01, 0.01, 0.012), redDot, 0, 0.12, 0.12);
+      add(g, B(0.066, 0.16, 0.07), grip, 0, -0.12, 0.13, 0.2);
+      muzzle.position.set(0, 0.038, -0.62);
       break;
     }
     case 'fang': {
-      // Fang 匕首：握柄 → 护手 → 渐宽刀身 → 尖锋。刀身略向上倾，符合持握姿态。
-      const blade = mat(0xb9c4cc, { metalness: 0.9, roughness: 0.22 });
-      const edge = mat(0xe8f2f8, { metalness: 0.95, roughness: 0.12 });
-      // 握柄
-      add(g, B(0.042, 0.05, 0.13), grip, 0, 0.02, 0.07);
-      // 护手
-      add(g, B(0.10, 0.022, 0.025), dark, 0, 0.025, -0.005);
-      // 刀身主体（扁平、略上翘）
-      add(g, B(0.032, 0.052, 0.24), blade, 0, 0.042, -0.14, -0.06);
-      // 刀锋亮边
-      add(g, B(0.008, 0.056, 0.24), edge, 0.017, 0.042, -0.14, -0.06);
-      // 刀尖
-      add(g, new THREE.ConeGeometry(0.028, 0.11, 4), blade, 0, 0.052, -0.3, -Math.PI / 2 - 0.08, Math.PI / 4, 0);
-      // 刀背凸起
-      add(g, B(0.036, 0.016, 0.1), dark, 0, 0.068, -0.1, -0.06);
-      muzzle.position.z = -0.38;
+      // Fang 战术赛博爪刃（极致变帅！）：指环尾扣 + 缠绳握柄 + 镂空护手 + 钛合金双刃 + 发光猩红等离子刃缘 + 锯齿刀背
+      const titanium = mat(0xc6d4e0, { metalness: 0.85, roughness: 0.22 });
+      const darkSteel = mat(0x2d3540, { metalness: 0.75, roughness: 0.32 });
+      const neonEdge = mat(0xff3b30, { emissive: 0xff261b, emissiveIntensity: 2.8, roughness: 0.15 });
+      const cord = mat(0x1f242c, { roughness: 0.9 });
+      // 尾部战术指环（Karambit Ring）
+      add(g, new THREE.TorusGeometry(0.026, 0.0075, 10, 18), darkSteel, 0, -0.008, 0.145, 0, Math.PI / 2, 0);
+      // 缠绳人体工学握柄
+      add(g, B(0.036, 0.048, 0.135), cord, 0, 0.012, 0.062, -0.05);
+      for (let i = 0; i < 4; i++) {
+        add(g, B(0.040, 0.051, 0.012), accent, 0, 0.012, 0.018 + i * 0.028, -0.05);
+      }
+      // 镂空双翼护手
+      add(g, B(0.095, 0.024, 0.026), darkSteel, 0, 0.024, -0.012);
+      add(g, B(0.028, 0.042, 0.022), neonEdge, 0, 0.024, -0.012);
+      // 渐宽弧形大马士革钛刀身 + 血槽
+      add(g, B(0.016, 0.058, 0.26), titanium, 0, 0.046, -0.155, -0.08);
+      add(g, B(0.020, 0.018, 0.19), darkSteel, 0, 0.054, -0.135, -0.08);
+      // 刀背战术锯齿
+      for (let i = 0; i < 5; i++) {
+        add(g, B(0.018, 0.014, 0.016), darkSteel, 0, 0.076 + i * 0.003, -0.06 - i * 0.032, -0.35);
+      }
+      // 发光猩红等离子开刃线
+      add(g, B(0.006, 0.012, 0.27), neonEdge, 0, 0.018, -0.158, -0.08);
+      // 锐利棱面刀尖（朝前 -Z）
+      add(g, new THREE.ConeGeometry(0.032, 0.13, 4), titanium, 0, 0.064, -0.34, -Math.PI / 2 - 0.10, Math.PI / 4, 0);
+      add(g, new THREE.ConeGeometry(0.012, 0.135, 4), neonEdge, 0, 0.044, -0.342, -Math.PI / 2 - 0.10, Math.PI / 4, 0);
+      muzzle.position.set(0, 0.05, -0.42);
       break;
     }
     case 'thunder': {
-      add(g, new THREE.SphereGeometry(0.075, 14, 10), mat(0x5c6b3a, { roughness: 0.5 }), 0, 0, -0.12);
-      add(g, B(0.04, 0.03, 0.05), metal, 0, 0.05, -0.05);
-      add(g, new THREE.TorusGeometry(0.025, 0.008, 6, 10), metal, 0, 0.02, -0.19);
-      muzzle.position.z = -0.2;
+      // 战术破片手雷：格纹雷体 + 保险握片 + 拉环 + 发光定时灯
+      add(g, new THREE.SphereGeometry(0.072, 14, 12), mat(0x4b5c34, { roughness: 0.48, metalness: 0.25 }), 0, 0, -0.11);
+      add(g, new THREE.TorusGeometry(0.068, 0.008, 6, 16), dark, 0, 0.01, -0.11, Math.PI / 2, 0, 0);
+      add(g, B(0.034, 0.042, 0.046), metal, 0, 0.065, -0.09);
+      add(g, B(0.016, 0.095, 0.022), accent, 0.042, 0.025, -0.07, 0, 0, -0.28);
+      add(g, new THREE.TorusGeometry(0.024, 0.006, 8, 12), metal, -0.03, 0.06, -0.14);
+      add(g, new THREE.SphereGeometry(0.012, 8, 8), redDot, 0, 0.088, -0.09);
+      muzzle.position.set(0, 0, -0.22);
       break;
     }
     case 'zclaw': {
-      // 尸爪：三根外张的利爪 + 掌部 + 腕部，爪尖偏暖白，掌部偏腐绿。
-      const clawMat = mat(0xe4dccb, { roughness: 0.35, metalness: 0.1 });
-      const flesh = mat(0x5d7434, { roughness: 0.85 });
-      const wound = mat(0x8a3f3f, { roughness: 0.7 });
-      // 掌部
-      add(g, B(0.13, 0.14, 0.13), flesh, 0, 0, 0.01);
-      // 腕部
-      add(g, B(0.09, 0.10, 0.14), flesh, 0, -0.005, 0.12);
-      // 三根爪：根粗尖细，向前并向外张开
-      for (let i = -1; i <= 1; i++) {
-        const outward = i * 0.055;
-        // 指节
-        add(g, B(0.034, 0.05, 0.07), flesh, outward, -0.012, -0.058, 0.15, i * 0.1, 0);
-        // 爪身
-        add(g, new THREE.ConeGeometry(0.021, 0.26, 6), clawMat, outward * 1.55, -0.005, -0.21, 1.28, i * 0.16, i * 0.14);
-      }
-      // 掌心血痕
-      add(g, B(0.05, 0.012, 0.05), wound, 0, 0.072, 0.0);
-      muzzle.position.z = -0.26;
+      // 尸爪（彻底修复方向 + 极致变帅！）：双持异变利爪，零人类手套，全部爪尖严格朝向前方 (-Z)！
+      const boneMat = mat(0xe8dec8, { roughness: 0.28, metalness: 0.18 });
+      const obsidianMat = mat(0x281c24, { roughness: 0.35, metalness: 0.45 });
+      const flesh = mat(0x4f682e, { roughness: 0.8 });
+      const darkFlesh = mat(0x32421d, { roughness: 0.85 });
+      const bioGlow = mat(0xff2a1e, { emissive: 0xff1e10, emissiveIntensity: 2.4 });
+      const buildHandClaw = (side) => {
+        const hg = new THREE.Group();
+        // 右手靠主视野，左手在左侧对称护卫形成极具压迫感的双爪姿态
+        hg.position.set(side > 0 ? 0.02 : -0.44, side > 0 ? -0.02 : -0.05, side > 0 ? 0.0 : 0.05);
+        hg.rotation.set(0.08, side * -0.14, side * -0.18);
+        // 变异肌腱前臂 + 撕裂袖口 + 猩红生物荧光血管
+        add(hg, B(0.095, 0.092, 0.22), darkFlesh, 0, -0.02, 0.14);
+        add(hg, B(0.105, 0.098, 0.06), mat(0x22261e, { roughness: 0.92 }), 0, -0.02, 0.22);
+        add(hg, B(0.018, 0.018, 0.20), bioGlow, side * 0.025, 0.032, 0.11);
+        add(hg, B(0.014, 0.014, 0.16), bioGlow, -side * 0.025, 0.028, 0.08);
+        // 畸变手掌 + 骨质指节隆起
+        add(hg, B(0.125, 0.085, 0.13), flesh, 0, 0.0, -0.01);
+        // 4 根弧形向前伸展的锋利骨刃（Cone 默认指 +Y，旋转 rx = -Math.PI/2 严格朝前 -Z！）
+        const offsets = [-0.056, -0.018, 0.020, 0.056];
+        const lengths = [0.22, 0.28, 0.26, 0.20];
+        for (let i = 0; i < 4; i++) {
+          const ox = offsets[i];
+          const len = lengths[i];
+          // 粗壮变异指节
+          add(hg, B(0.028, 0.032, 0.075), darkFlesh, ox, 0.008, -0.085, 0.12, -ox * 2.2, 0);
+          // 根部黑曜石角质鞘
+          add(hg, C(0.014, 0.020, 0.07, 6), obsidianMat, ox * 1.15, 0.012, -0.135, -Math.PI / 2 - 0.12, -ox * 2.4, 0);
+          // 锋利骨白前弯利爪（严格朝前 -Z，微向下弯钩）
+          add(hg, new THREE.ConeGeometry(0.016, len, 6), boneMat, ox * 1.38, -0.006, -0.15 - len * 0.48, -Math.PI / 2 - 0.22, -ox * 2.6, 0);
+          // 血染发光爪尖
+          add(hg, new THREE.ConeGeometry(0.008, 0.075, 5), bioGlow, ox * 1.48, -0.026, -0.15 - len * 0.85, -Math.PI / 2 - 0.28, -ox * 2.6, 0);
+        }
+        g.add(hg);
+      };
+      buildHandClaw(1);
+      buildHandClaw(-1);
+      muzzle.position.set(0, 0, -0.34);
       break;
     }
     case 'cryo_gun': {
-      const ice = mat(0x9fd8ff, { metalness: 0.6, roughness: 0.3 });
-      add(g, B(0.08, 0.13, 0.34), ice, 0, 0.01, 0.03);
-      add(g, B(0.07, 0.09, 0.16), dark, 0, 0.01, -0.24);
-      add(g, new THREE.CylinderGeometry(0.02, 0.02, 0.26, 10), mat(0xbfe9ff), 0, 0.02, -0.38, Math.PI / 2, 0, 0);
-      add(g, B(0.08, 0.17, 0.07), grip, 0, -0.13, 0.11, -0.14);
-      add(g, B(0.08, 0.2, 0.06), grip, 0, -0.15, -0.1, -0.14);
-      add(g, B(0.04, 0.06, 0.12), mat(0x55c8ff, { emissive: 0x33aaff, emissiveIntensity: 2.2 }), 0, 0.05, 0.17);
-      muzzle.position.z = -0.52;
+      const ice = mat(0x88d4ff, { metalness: 0.55, roughness: 0.25 });
+      const core = mat(0x55d8ff, { emissive: 0x22b8ff, emissiveIntensity: 2.6 });
+      add(g, B(0.086, 0.13, 0.36), ice, 0, 0.015, 0.02);
+      add(g, B(0.072, 0.09, 0.22), dark, 0, 0.015, -0.26);
+      add(g, C(0.022, 0.022, 0.28, 12), mat(0xc8f0ff), 0, 0.024, -0.42, Math.PI / 2, 0, 0);
+      add(g, C(0.036, 0.036, 0.14, 12), core, 0, 0.068, -0.05, Math.PI / 2, 0, 0);
+      add(g, B(0.065, 0.16, 0.068), grip, 0, -0.12, 0.11, 0.2);
+      add(g, B(0.055, 0.15, 0.06), dark, 0, -0.11, -0.10, 0.15);
+      muzzle.position.set(0, 0.024, -0.58);
       break;
     }
     case 'railgun': {
-      const coil = mat(0xff9d4d, { emissive: 0xff7b2a, emissiveIntensity: 2 });
-      add(g, B(0.09, 0.14, 0.46), metal, 0, 0.02, 0.04);
-      add(g, B(0.07, 0.09, 0.3), dark, 0, 0.02, -0.34);
-      add(g, new THREE.CylinderGeometry(0.018, 0.018, 0.5, 10), mat(0x22262a), 0, 0.03, -0.5, Math.PI / 2, 0, 0);
-      add(g, new THREE.TorusGeometry(0.035, 0.012, 8, 12), coil, 0, 0.07, -0.1);
-      add(g, B(0.09, 0.16, 0.07), grip, 0, -0.14, 0.12, -0.16);
-      add(g, B(0.08, 0.2, 0.06), grip, 0, -0.16, -0.16, -0.14);
-      add(g, new THREE.SphereGeometry(0.03, 10, 8), mat(0xffb36b, { emissive: 0xff7b2a, emissiveIntensity: 2 }), 0, 0.02, 0.2);
-      muzzle.position.z = -0.62;
+      const coil = mat(0xff963a, { emissive: 0xff6e18, emissiveIntensity: 2.5 });
+      add(g, B(0.095, 0.14, 0.46), gunmetal, 0, 0.02, 0.04);
+      // 双平行电磁导轨 + 发光加速线圈
+      add(g, B(0.022, 0.042, 0.54), dark, -0.028, 0.032, -0.36);
+      add(g, B(0.022, 0.042, 0.54), dark, 0.028, 0.032, -0.36);
+      for (let i = 0; i < 4; i++) {
+        add(g, new THREE.TorusGeometry(0.038, 0.009, 8, 14), coil, 0, 0.032, -0.18 - i * 0.11);
+      }
+      add(g, B(0.068, 0.16, 0.07), grip, 0, -0.125, 0.13, 0.2);
+      add(g, C(0.026, 0.026, 0.18, 12), dark, 0, 0.12, 0.02, Math.PI / 2, 0, 0);
+      muzzle.position.set(0, 0.032, -0.66);
       break;
     }
     case 'energy_rifle': {
-      const glow = mat(0x39d2ff, { emissive: 0x1fb8ff, emissiveIntensity: 2.2 });
-      const panel = mat(0x21303a, { metalness: 0.5, roughness: 0.5 });
-      add(g, B(0.09, 0.14, 0.4), metal, 0, 0.02, 0.02);
-      add(g, B(0.08, 0.1, 0.2), panel, 0, 0.02, -0.26);
-      add(g, new THREE.CylinderGeometry(0.022, 0.022, 0.3, 10), dark, 0, 0.03, -0.42, Math.PI / 2, 0, 0);
-      add(g, B(0.09, 0.16, 0.07), grip, 0, -0.14, 0.1, -0.14);
-      add(g, B(0.08, 0.2, 0.06), grip, 0, -0.16, -0.12, -0.14);
-      add(g, B(0.1, 0.06, 0.2), panel, 0, 0.05, -0.18);
-      add(g, B(0.06, 0.05, 0.16), glow, 0, 0.065, -0.22);
-      add(g, new THREE.TorusGeometry(0.02, 0.008, 8, 10), glow, 0, 0.07, -0.4);
-      add(g, B(0.04, 0.02, 0.03), glow, 0, 0.09, 0.14);
-      muzzle.position.z = -0.56;
+      const panel = mat(0x1f2f3c, { metalness: 0.5, roughness: 0.45 });
+      add(g, B(0.088, 0.135, 0.40), gunmetal, 0, 0.02, 0.02);
+      add(g, B(0.078, 0.096, 0.24), panel, 0, 0.02, -0.26);
+      add(g, C(0.021, 0.021, 0.30, 12), dark, 0, 0.03, -0.44, Math.PI / 2, 0, 0);
+      add(g, B(0.056, 0.046, 0.20), cyanGlow, 0, 0.072, -0.22);
+      add(g, new THREE.TorusGeometry(0.026, 0.008, 8, 12), cyanGlow, 0, 0.03, -0.46);
+      add(g, B(0.065, 0.155, 0.068), grip, 0, -0.12, 0.11, 0.2);
+      add(g, B(0.055, 0.15, 0.06), dark, 0, -0.12, -0.11, 0.15);
+      muzzle.position.set(0, 0.03, -0.60);
+      break;
+    }
+    case 'plasma_shotgun': {
+      // 新增模组武器：PX-12 等离子霰弹枪（双并联重型能量腔 + 紫色聚能环）
+      const plasmaGlow = mat(0xd85aff, { emissive: 0xb830ff, emissiveIntensity: 2.6 });
+      add(g, B(0.105, 0.14, 0.38), gunmetal, 0, 0.02, 0.02);
+      add(g, C(0.026, 0.026, 0.36, 12), dark, -0.028, 0.036, -0.32, Math.PI / 2, 0, 0);
+      add(g, C(0.026, 0.026, 0.36, 12), dark, 0.028, 0.036, -0.32, Math.PI / 2, 0, 0);
+      add(g, B(0.09, 0.05, 0.22), plasmaGlow, 0, 0.088, -0.14);
+      add(g, new THREE.TorusGeometry(0.042, 0.009, 8, 16), plasmaGlow, 0, 0.036, -0.42);
+      add(g, B(0.07, 0.16, 0.072), grip, 0, -0.12, 0.12, 0.22);
+      muzzle.position.set(0, 0.036, -0.54);
       break;
     }
     default:
       add(g, B(0.08, 0.12, 0.3), dark, 0, 0, 0);
   }
-  addHands(g, id);
+
+  // 尸爪严禁套人类手套！
+  if (id !== 'zclaw') addHands(g, id);
   g.add(muzzle);
-  // 第一人称模型不参与阴影：它离相机只有 0.5m，而阴影贴图覆盖整张地图（2048 覆盖 100m，
-  // 每 texel 约 5cm），自阴影 acne 会把整把枪压成一块纯黑剪影。
-  // 第一人称材质微调：金属件压低 metalness + 给一点自发光。
-  // 枪身与相机只隔 0.4m，场景光的入射角几乎全是掠射，纯 PBR 金属会整块发黑；
-  // 少量自发光（基础色的 30%）保证任何光照下都能看清结构与手部。
+
   const remap = new Map();
   g.traverse((o) => {
     if (!o.isMesh) return;
@@ -332,12 +502,13 @@ export function buildViewmodel(id) {
     let m = remap.get(o.material);
     if (!m) {
       m = o.material.clone();
-      if (m.emissive) {
-        m.emissive = new THREE.Color(m.color).multiplyScalar(0.3);
+      const hasStrongEmissive = m.emissive && (m.emissive.r + m.emissive.g + m.emissive.b > 0.1);
+      if (m.emissive && !hasStrongEmissive) {
+        m.emissive = new THREE.Color(m.color).multiplyScalar(0.28);
         m.emissiveIntensity = 1;
       }
-      if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.3);
-      if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.45);
+      if (m.metalness !== undefined) m.metalness = Math.min(m.metalness, 0.42);
+      if (m.roughness !== undefined) m.roughness = Math.max(m.roughness, 0.36);
       m.needsUpdate = true;
       remap.set(o.material, m);
     }
@@ -347,106 +518,127 @@ export function buildViewmodel(id) {
   return g;
 }
 
-// 第一人称手部：只做"握把 + 前护木"两只手 + 一段袖口。
-// 没有手的枪看起来像"浮在空中的模型"，这是第一人称最容易出戏的地方。
 const HAND_POS = {
   k9: { grip: [0.005, -0.11, 0.06], fore: [-0.045, -0.095, 0.03] },
-  vx9: { grip: [0, -0.115, 0.13], fore: [-0.02, -0.07, -0.09] },
-  arc17: { grip: [0, -0.12, 0.10], fore: [-0.02, -0.05, -0.15] },
-  warden: { grip: [0, -0.12, 0.10], fore: [-0.02, -0.04, -0.21] },
-  longshot: { grip: [0, -0.12, 0.12], fore: [-0.02, -0.06, -0.16] },
-  bruiser: { grip: [0, -0.12, 0.10], fore: [-0.02, -0.05, -0.12] },
-  cryo_gun: { grip: [0, -0.11, 0.11], fore: [-0.02, -0.06, -0.14] },
-  railgun: { grip: [0, -0.12, 0.12], fore: [-0.02, -0.06, -0.18] },
-  energy_rifle: { grip: [0, -0.12, 0.10], fore: [-0.02, -0.06, -0.14] },
-  fang: { grip: [0, 0.0, 0.07] },
-  zclaw: { grip: [0, 0.0, 0.08] },
+  vx9: { grip: [0, -0.115, 0.12], fore: [-0.02, -0.065, -0.12] },
+  arc17: { grip: [0, -0.115, 0.115], fore: [-0.02, -0.065, -0.22] },
+  warden: { grip: [0, -0.115, 0.125], fore: [-0.02, -0.045, -0.25] },
+  longshot: { grip: [0, -0.115, 0.13], fore: [-0.02, -0.055, -0.20] },
+  bruiser: { grip: [0, -0.12, 0.13], fore: [-0.02, -0.055, -0.16] },
+  cryo_gun: { grip: [0, -0.115, 0.11], fore: [-0.02, -0.06, -0.16] },
+  railgun: { grip: [0, -0.12, 0.13], fore: [-0.02, -0.06, -0.20] },
+  energy_rifle: { grip: [0, -0.115, 0.11], fore: [-0.02, -0.06, -0.16] },
+  plasma_shotgun: { grip: [0, -0.115, 0.12], fore: [-0.02, -0.05, -0.20] },
+  fang: { grip: [0, 0.0, 0.065] },
   thunder: { grip: [0, -0.02, -0.06] },
 };
 
 export function addHands(g, id) {
   const pos = HAND_POS[id] || { grip: [0, -0.12, 0.1], fore: null };
   const skin = mat(0xd8a06a, { roughness: 0.85 });
-  const glove = mat(0x39423a, { roughness: 0.9 });
+  const glove = mat(0x283038, { roughness: 0.82 });
+  const knuckle = mat(0x181e24, { metalness: 0.35, roughness: 0.5 });
 
-  // 只做"握在护木/握把上的手"，不做前臂：第一人称里手臂离相机只有 0.4m，
-  // 任何袖口状的大块都会被透视放大成挡住半个屏幕的电线杆，反而更假。
   const [gx, gy, gz] = pos.grip;
-  add(g, B(0.062, 0.072, 0.088), glove, gx, gy + 0.004, gz, 0.15);
-  add(g, B(0.048, 0.044, 0.05), skin, gx - 0.03, gy + 0.03, gz - 0.01);
-  add(g, B(0.02, 0.05, 0.055), skin, gx + 0.032, gy + 0.02, gz - 0.02, 0, 0, -0.2);
+  add(g, B(0.064, 0.072, 0.088), glove, gx, gy + 0.004, gz, 0.15);
+  add(g, B(0.066, 0.020, 0.036), knuckle, gx, gy + 0.032, gz - 0.02, 0.15);
+  add(g, B(0.046, 0.040, 0.048), skin, gx - 0.028, gy + 0.028, gz - 0.01);
   if (pos.fore) {
     const [fx, fy, fz] = pos.fore;
-    add(g, B(0.06, 0.058, 0.08), glove, fx, fy, fz, 0.1);
-    add(g, B(0.046, 0.042, 0.05), skin, fx + 0.03, fy + 0.026, fz + 0.012);
+    add(g, B(0.062, 0.058, 0.082), glove, fx, fy, fz, 0.1);
+    add(g, B(0.044, 0.038, 0.046), skin, fx + 0.028, fy + 0.024, fz + 0.012);
   }
 }
 
-// ---------------- 道具 ----------------
-export function buildCrate(c, size) {
+// ---------------- 精细化地图道具 ----------------
+export function buildCrate(c) {
   const w = Math.max(0.05, c.max.x - c.min.x);
   const h = Math.max(0.05, c.max.y - c.min.y);
   const d = Math.max(0.05, c.max.z - c.min.z);
-  // 取模结果在坐标为负时会得到 -1/-2（JS 的 % 保留符号），
-  // 直接用会取到 colors[undefined] → 材质色 undefined，木箱变成纯白/纯黑。
-  // 先取绝对值再取模，保证 0..2。
   const hash = Math.abs(Math.floor(c.min.x * 7 + c.min.z * 13)) % 3;
-  const colors = [0x8a6f3f, 0x6f5a3a, 0x7c6a4a];
-  const m = new THREE.Mesh(
+  const colors = [0x8c6f3e, 0x6c593c, 0x52626e];
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
     new THREE.BoxGeometry(w, h, d),
-    new THREE.MeshStandardMaterial({ color: colors[hash], roughness: 0.85 })
+    new THREE.MeshStandardMaterial({ color: colors[hash], roughness: 0.82, metalness: hash === 2 ? 0.35 : 0.08 })
   );
-  m.position.set((c.min.x + c.max.x) / 2, (c.min.y + c.max.y) / 2, (c.min.z + c.max.z) / 2);
-  m.castShadow = true;
-  m.receiveShadow = true;
-  // 边框线
+  body.castShadow = true;
+  body.receiveShadow = true;
+  g.add(body);
+  // 顶部与底部金属包边
+  const trimM = mat(0x283038, { metalness: 0.45, roughness: 0.5 });
+  const topBand = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 0.08, d + 0.04), trimM);
+  topBand.position.y = h / 2 - 0.04;
+  g.add(topBand);
+  const botBand = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 0.08, d + 0.04), trimM);
+  botBand.position.y = -h / 2 + 0.04;
+  g.add(botBand);
   const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(m.geometry),
-    new THREE.LineBasicMaterial({ color: 0x1c140a, transparent: true, opacity: 0.6 })
+    new THREE.EdgesGeometry(body.geometry),
+    new THREE.LineBasicMaterial({ color: 0x161c22, transparent: true, opacity: 0.55 })
   );
-  m.add(edges);
-  return m;
+  g.add(edges);
+  g.position.set((c.min.x + c.max.x) / 2, (c.min.y + c.max.y) / 2, (c.min.z + c.max.z) / 2);
+  return g;
 }
 
 export function buildBarrel(c) {
   const h = Math.max(0.1, c.max.y - c.min.y);
   const r = Math.max(0.3, (c.max.x - c.min.x) / 2);
   const g = new THREE.Group();
+  const isRed = Math.abs(Math.floor(c.min.x + c.min.z)) % 2 === 0;
   const body = new THREE.Mesh(
-    new THREE.CylinderGeometry(r, r, h, 14),
-    new THREE.MeshStandardMaterial({ color: 0x7c8a5a, roughness: 0.5, metalness: 0.35 })
+    new THREE.CylinderGeometry(r, r, h, 16),
+    new THREE.MeshStandardMaterial({ color: isRed ? 0xa8362a : 0x5c7552, roughness: 0.45, metalness: 0.4 })
   );
   body.position.y = h / 2;
   body.castShadow = true;
+  body.receiveShadow = true;
   g.add(body);
-  const top = new THREE.Mesh(
-    new THREE.CylinderGeometry(r * 0.94, r * 0.94, 0.06, 14),
-    new THREE.MeshStandardMaterial({ color: 0x4a5540, roughness: 0.6 })
-  );
+  // 金属加强筋与警示环
+  const ribMat = mat(0x2c343c, { metalness: 0.55, roughness: 0.4 });
+  for (const ry of [h * 0.28, h * 0.72]) {
+    const rib = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.03, r * 1.03, 0.07, 16), ribMat);
+    rib.position.y = ry;
+    g.add(rib);
+  }
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.94, r * 0.94, 0.06, 16), ribMat);
   top.position.y = h + 0.02;
   g.add(top);
-  g.position.set((c.min.x + c.max.x) / 2, 0, (c.min.z + c.max.z) / 2);
+  g.position.set((c.min.x + c.max.x) / 2, c.min.y, (c.min.z + c.max.z) / 2);
   return g;
 }
 
 export function buildPillar(c) {
   const h = Math.max(0.1, c.max.y - c.min.y);
   const r = Math.max(0.3, (c.max.x - c.min.x) / 2);
-  const m = new THREE.Mesh(
-    new THREE.CylinderGeometry(r * 0.88, r, h, 12),
-    new THREE.MeshStandardMaterial({ color: 0xb8c2b8, roughness: 0.55, metalness: 0.2 })
+  const g = new THREE.Group();
+  const col = new THREE.Mesh(
+    new THREE.CylinderGeometry(r * 0.86, r * 0.96, h, 14),
+    new THREE.MeshStandardMaterial({ color: 0xadb8c2, roughness: 0.52, metalness: 0.25 })
   );
-  m.position.set((c.min.x + c.max.x) / 2, h / 2, (c.min.z + c.max.z) / 2);
-  m.castShadow = true;
-  m.receiveShadow = true;
-  return m;
+  col.position.y = h / 2;
+  col.castShadow = true;
+  col.receiveShadow = true;
+  g.add(col);
+  // 柱脚底座 + 柱头
+  const capMat = mat(0x46525e, { metalness: 0.45, roughness: 0.45 });
+  const base = new THREE.Mesh(new THREE.BoxGeometry(r * 2.1, 0.26, r * 2.1), capMat);
+  base.position.y = 0.13;
+  g.add(base);
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(r * 2.0, 0.22, r * 2.0), capMat);
+  cap.position.y = h - 0.11;
+  g.add(cap);
+  g.position.set((c.min.x + c.max.x) / 2, c.min.y, (c.min.z + c.max.z) / 2);
+  return g;
 }
 
 export function buildBomb() {
   const g = new THREE.Group();
-  add(g, B(0.36, 0.16, 0.22), mat(0x37413a, { metalness: 0.5, roughness: 0.5 }), 0, 0.1, 0);
-  add(g, new THREE.CylinderGeometry(0.03, 0.03, 0.18, 8), mat(0x9aa5a0), 0, 0.22, -0.04);
-  const light = add(g, new THREE.SphereGeometry(0.035, 8, 8), mat(0xff2020, { emissive: 0xff2020, emissiveIntensity: 2.5 }), 0.12, 0.18, 0.06);
+  add(g, B(0.38, 0.16, 0.24), mat(0x2d3538, { metalness: 0.55, roughness: 0.45 }), 0, 0.1, 0);
+  add(g, B(0.14, 0.04, 0.09), mat(0x102818, { emissive: 0x22ff66, emissiveIntensity: 1.5 }), -0.06, 0.19, 0);
+  add(g, C(0.025, 0.025, 0.20, 8), mat(0x9aa5a0), 0.02, 0.22, -0.04);
+  const light = add(g, new THREE.SphereGeometry(0.038, 8, 8), mat(0xff2020, { emissive: 0xff2020, emissiveIntensity: 2.8 }), 0.12, 0.19, 0.06);
   g.userData.light = light;
   g.userData.blink = 0;
   return g;
@@ -455,14 +647,14 @@ export function buildBomb() {
 export function buildAmmoBox() {
   const g = new THREE.Group();
   const m = new THREE.Mesh(
-    new THREE.BoxGeometry(0.8, 0.5, 0.6),
-    new THREE.MeshStandardMaterial({ color: 0xd9a92f, roughness: 0.6, emissive: 0x6b4d00, emissiveIntensity: 0.35 })
+    new THREE.BoxGeometry(0.84, 0.52, 0.62),
+    new THREE.MeshStandardMaterial({ color: 0xdfa82e, roughness: 0.5, metalness: 0.25, emissive: 0x6b4d00, emissiveIntensity: 0.4 })
   );
-  m.position.y = 0.25;
+  m.position.y = 0.26;
   m.castShadow = true;
   g.add(m);
-  const cross = add(g, B(0.28, 0.12, 0.03), mat(0x222), 0, 0.3, 0.32);
-  add(g, B(0.12, 0.28, 0.03), mat(0x222), 0, 0.3, 0.32);
+  const cross = add(g, B(0.30, 0.12, 0.03), mat(0x1a1e22), 0, 0.30, 0.32);
+  add(g, B(0.12, 0.30, 0.03), mat(0x1a1e22), 0, 0.30, 0.32);
   g.userData.pulse = cross;
   return g;
 }
@@ -470,54 +662,53 @@ export function buildAmmoBox() {
 export function buildHealthBox() {
   const g = new THREE.Group();
   const m = new THREE.Mesh(
-    new THREE.BoxGeometry(0.8, 0.5, 0.6),
-    new THREE.MeshStandardMaterial({ color: 0x2fbf71, roughness: 0.6, emissive: 0x0c5c2e, emissiveIntensity: 0.35 })
+    new THREE.BoxGeometry(0.84, 0.52, 0.62),
+    new THREE.MeshStandardMaterial({ color: 0x28c776, roughness: 0.5, metalness: 0.2, emissive: 0x0c6632, emissiveIntensity: 0.42 })
   );
-  m.position.y = 0.25;
+  m.position.y = 0.26;
   m.castShadow = true;
   g.add(m);
-  const cross = add(g, B(0.3, 0.12, 0.03), mat(0xf4faf6), 0, 0.3, 0.32);
-  add(g, B(0.12, 0.3, 0.03), mat(0xf4faf6), 0, 0.3, 0.32);
+  const cross = add(g, B(0.32, 0.12, 0.03), mat(0xf4faf6, { emissive: 0xffffff, emissiveIntensity: 0.6 }), 0, 0.30, 0.32);
+  add(g, B(0.12, 0.32, 0.03), mat(0xf4faf6, { emissive: 0xffffff, emissiveIntensity: 0.6 }), 0, 0.30, 0.32);
   g.userData.pulse = cross;
   return g;
 }
 
-// 安放点字母牌：双面发光平面，远处也能认出 A/B 点
 export function buildSiteSign(text, color = 0xffcc33) {
   const c = document.createElement('canvas');
   c.width = 128;
   c.height = 128;
   const ctx = c.getContext('2d');
   const rgba = `#${color.toString(16).padStart(6, '0')}`;
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.fillStyle = 'rgba(0,0,0,0.42)';
   ctx.fillRect(0, 0, 128, 128);
   ctx.strokeStyle = rgba;
   ctx.lineWidth = 8;
   ctx.strokeRect(6, 6, 116, 116);
   ctx.fillStyle = rgba;
-  ctx.font = 'bold 86px system-ui, sans-serif';
+  ctx.font = 'bold 84px system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, 64, 68);
   const tex = new THREE.CanvasTexture(c);
-  const mesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.3, 1.3),
+  return new THREE.Mesh(
+    new THREE.PlaneGeometry(1.35, 1.35),
     new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false })
   );
-  return mesh;
 }
 
-export function buildSiteRing(color, radius = 2.6) {  const g = new THREE.Group();
+export function buildSiteRing(color, radius = 2.6) {
+  const g = new THREE.Group();
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(radius - 0.3, radius, 40),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.32, side: THREE.DoubleSide, depthWrite: false })
+    new THREE.RingGeometry(radius - 0.32, radius, 44),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false })
   );
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = 0.06;
   g.add(ring);
   const glow = new THREE.Mesh(
-    new THREE.CircleGeometry(radius, 32),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.08, depthWrite: false })
+    new THREE.CircleGeometry(radius, 36),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.11, depthWrite: false })
   );
   glow.rotation.x = -Math.PI / 2;
   glow.position.y = 0.04;
@@ -531,19 +722,17 @@ export function buildLightGlow(color) {
   c.height = 64;
   const ctx = c.getContext('2d');
   const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
-  g.addColorStop(0, 'rgba(255,255,230,0.95)');
-  g.addColorStop(0.4, 'rgba(255,240,180,0.35)');
-  g.addColorStop(1, 'rgba(255,240,180,0)');
+  g.addColorStop(0, 'rgba(255,255,235,0.95)');
+  g.addColorStop(0.4, 'rgba(255,240,190,0.38)');
+  g.addColorStop(1, 'rgba(255,240,190,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 64, 64);
   const tex = new THREE.CanvasTexture(c);
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color, transparent: true, depthWrite: false }));
-  sprite.scale.set(3, 3, 1);
+  sprite.scale.set(3.2, 3.2, 1);
   return sprite;
 }
 
-// 玩家头顶名牌 + 血条（Canvas 贴图，血量变化时重绘）；carrier=true 时绘制炸弹携带标记
-// ft：0=普通，1=琉璃猎人，2=尸王，3=尸仆
 export function buildNameTag(name, hp, maxHp, zombie = false, team = 0, carrier = false, ft = 0) {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
@@ -556,7 +745,6 @@ export function buildNameTag(name, hp, maxHp, zombie = false, team = 0, carrier 
     ctx.clearRect(0, 0, 256, 96);
     const d = sprite.userData;
     if (d.carrier) {
-      // 炸弹图标：红色圆 + 灰色引信 + 黄圈
       ctx.fillStyle = '#3a3a3a';
       ctx.fillRect(126, 4, 4, 7);
       ctx.fillStyle = '#ff3b30';
@@ -571,9 +759,9 @@ export function buildNameTag(name, hp, maxHp, zombie = false, team = 0, carrier 
     ctx.strokeStyle = 'rgba(0,0,0,.85)';
     ctx.strokeText(d.name, 128, 42);
     let nameColor = d.zombie ? '#ffb0a0' : d.team === 1 ? '#cfe4ff' : d.team === 2 ? '#ffe0c2' : '#e8f2ea';
-    if (d.ft === 1) nameColor = '#7dffd8'; // 琉璃猎人
-    else if (d.ft === 2) nameColor = '#d9a0ff'; // 尸王
-    else if (d.ft === 3) nameColor = '#b6ff9a'; // 尸仆
+    if (d.ft === 1) nameColor = '#7dffd8';
+    else if (d.ft === 2) nameColor = '#d9a0ff';
+    else if (d.ft === 3) nameColor = '#b6ff9a';
     ctx.fillStyle = nameColor;
     ctx.fillText(d.name, 128, 42);
     const w = 180, h = 13, x = 38, y = 60;

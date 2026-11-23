@@ -98,10 +98,13 @@
         <div class="menu-row">
           <label>模式</label>
           <select id="mode-select">
-            <option value="defusal">拆弹模式（PVP）</option>
-            <option value="zombie">生化模式（感染）</option>
-            <option value="tdm">团队死斗（复活战）</option>
-            <option value="gungame">军备竞赛（升级枪械）</option>
+            <option value="defusal">拆弹模式（经典爆破）</option>
+            <option value="zombie">生化模式（感染决战）</option>
+            <option value="tdm">团队死斗（60杀复活战）</option>
+            <option value="gungame">军备竞赛（连杀升枪）</option>
+            <option value="ffa">个人混战（25杀回血称王）</option>
+            <option value="sniper">飞天瞬狙（低重力一击必杀）</option>
+            <option value="koth">据点争夺（占领中央高地）</option>
           </select>
         </div>
         <div class="menu-row">
@@ -127,6 +130,29 @@
             <option value="0">休闲</option>
             <option value="1" selected>普通</option>
             <option value="2">高手</option>
+          </select>
+        </div>
+        <div class="menu-row">
+          <label>地图</label>
+          <select id="map-select">
+            <option value="auto" selected>按模式推荐地图</option>
+            <option value="citadel">Citadel 赛博要塞（新）</option>
+            <option value="sanctum">Sanctum 雪原圣殿（新）</option>
+            <option value="metro">Metro 地下铁枢纽（新）</option>
+            <option value="vertex">Vertex 拆弹基地</option>
+            <option value="foundry">Foundry 钢铁铸造厂</option>
+            <option value="obsidian">Obsidian 黑曜石要塞</option>
+            <option value="pit">Pit 竞技深坑</option>
+            <option value="containment">Containment 生化收容所</option>
+            <option value="hive">Hive 蜂巢实验室</option>
+          </select>
+        </div>
+        <div class="menu-row">
+          <label>联机通道</label>
+          <select id="relay-select">
+            <option value="auto" selected>自动（优先 VibeHub + 公网中继回退）</option>
+            <option value="vibehub">仅 VibeHub P2P</option>
+            <option value="relay">直连公网中继（免登录 / 同屏）</option>
           </select>
         </div>
         <div class="menu-row">
@@ -162,14 +188,19 @@
         <label>音量 <input type="range" id="set-vol" min="0" max="100" step="1"></label>
         <label>背景音乐 <select id="set-music"><option value="1">开</option><option value="0">关</option></select></label>
         <label>阴影 <select id="set-shadow"><option value="1">开</option><option value="0">关</option></select></label>
-        <label>画质 <select id="set-quality"><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label>
+        <label>画质 <select id="set-quality"><option value="ultra">极致</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label>
+        <label>色彩风格 <select id="set-colorstyle"><option value="classic">原版战术</option><option value="cyber">赛博高对比</option><option value="cinema">电影冷峻</option><option value="warm">暖阳胶片</option></select></label>
         <label>显示 FPS <select id="set-fps"><option value="1">开</option><option value="0">关</option></select></label>
         <label>准星颜色 <input type="color" id="set-crosshair" value="#dcffe6"></label>
         <label>开镜方式 <select id="set-ads"><option value="hold">按住</option><option value="toggle">切换</option></select></label>
         <label>疾跑方式 <select id="set-sprint"><option value="hold">按住</option><option value="toggle">切换</option></select></label>
         <label>移动端按钮大小 <select id="set-btnscale"><option value="0.85">小</option><option value="1">标准</option><option value="1.2">大</option><option value="1.4">特大</option></select></label>
         <label>命中震动（移动端） <select id="set-haptics"><option value="1">开</option><option value="0">关</option></select></label>
-        <button id="settings-close" class="btn primary">返回</button>
+        <label>反转视角 Y 轴 <select id="set-inverty"><option value="0">关</option><option value="1">开</option></select></label>
+        <label>移动端左手镜像 <select id="set-lefthand"><option value="0">关</option><option value="1">开</option></select></label>
+        <label>移动端控件透明度 <input type="range" id="set-btnopacity" min="0.4" max="1" step="0.05" value="0.9"></label>
+        <label>手机陀螺仪辅助瞄准 <select id="set-gyro"><option value="0">关</option><option value="1">开</option></select></label>
+        <button id="settings-close" class="btn primary">保存并返回</button>
       </div>
     </div>
 

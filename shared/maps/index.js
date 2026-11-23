@@ -4,10 +4,11 @@ import obsidian from './obsidian.js';
 import foundry from './foundry.js';
 import hive from './hive.js';
 import pit from './pit.js';
+import citadel from './citadel.js';
+import sanctum from './sanctum.js';
+import metro from './metro.js';
 import { generateNav } from './navgen.js';
 
-// 导航图优先用自动生成：多层地图（天桥/楼梯）的手写 nav 极易漏边，
-// 一旦漏边 Bot 就会在原地打转。自动生成失败（节点过少）才回退到地图自带 nav。
 const navCache = new Map();
 
 function normalize(map) {
@@ -34,4 +35,7 @@ export const MAPS = {
   foundry: normalize(foundry),
   hive: normalize(hive),
   pit: normalize(pit),
+  citadel: normalize(citadel),
+  sanctum: normalize(sanctum),
+  metro: normalize(metro),
 };

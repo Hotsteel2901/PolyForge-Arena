@@ -1,167 +1,177 @@
-// 数据驱动武器：定义 + 运行时（射速、弹匣、换弹、伤害）。
-// 射速规划（RPM，半自动为扳机边沿触发）：
-//   Fang 匕首 170（自动挥砍） | K9 手枪 300（半自动）
-//   VX9 冲锋枪 900 | ARC-17 步枪 660 | Bruiser 机枪 720
-//   Warden 霰弹 85（半自动） | Longshot 狙击 45（半自动）
-//   Thunder 手雷 55（半自动） | 尸爪 72（自动）
+// 数据驱动武器（极致细分版）：每把枪拥有独特的定位、射速、后坐力曲线、穿甲、移速、爆头倍率与衰减特性。
 
 export const BUILTIN_WEAPONS = Object.freeze({
   fang: {
     id: 'fang',
-    name: 'Fang 匕首',
+    name: 'Fang 战术爪刃',
+    role: '近战刺杀 · 极速机动',
     slot: 0,
     auto: true,
     melee: true,
-    range: 2.4,
-    fireRate: 170,
-    damage: 40,
-    headshotMult: 1,
+    range: 2.6,
+    fireRate: 185,
+    damage: 48,
+    headshotMult: 2.2,
     pellets: 1,
     magSize: Infinity,
     reserve: Infinity,
     reloadTime: 0,
     spread: 0,
     adsSpread: 0,
-    recoil: 0.01,
-    moveMult: 1.05,
-    falloffNear: 1.5,
-    falloffFar: 2.4,
-    falloffMin: 0.9,
+    recoil: 0.008,
+    moveMult: 1.12,
+    falloffNear: 1.8,
+    falloffFar: 2.6,
+    falloffMin: 0.95,
+    sound: 'melee',
   },
   k9: {
     id: 'k9',
-    name: 'K9 手枪',
+    name: 'K9 战术手枪',
+    role: '精准点射 · 极速换弹',
     slot: 1,
     auto: false,
-    fireRate: 300,
-    damage: 32,
-    headshotMult: 1.8,
+    fireRate: 340,
+    damage: 34,
+    headshotMult: 2.1,
+    armorPen: 0.55,
     pellets: 1,
-    magSize: 12,
-    reserve: 48,
-    reloadTime: 1.4,
-    spread: 0.03,
-    adsSpread: 0.008,
-    recoil: 0.025,
-    moveMult: 1,
-    falloffNear: 12,
-    falloffFar: 55,
-    falloffMin: 0.45,
+    magSize: 14,
+    reserve: 56,
+    reloadTime: 1.25,
+    spread: 0.022,
+    adsSpread: 0.005,
+    recoil: 0.022,
+    moveMult: 1.04,
+    falloffNear: 16,
+    falloffFar: 58,
+    falloffMin: 0.52,
     sound: 'pistol',
   },
   vx9: {
     id: 'vx9',
-    name: 'VX9 冲锋枪',
+    name: 'VX9 极速冲锋枪',
+    role: '高射速跑打 · 近战缠斗',
     slot: 2,
     auto: true,
-    fireRate: 900,
-    damage: 20,
-    headshotMult: 1.7,
+    fireRate: 960,
+    damage: 19,
+    headshotMult: 1.75,
+    armorPen: 0.45,
     pellets: 1,
-    magSize: 30,
-    reserve: 120,
-    reloadTime: 1.9,
-    spread: 0.045,
-    adsSpread: 0.012,
-    recoil: 0.016,
-    moveMult: 1,
-    falloffNear: 10,
-    falloffFar: 45,
-    falloffMin: 0.4,
+    magSize: 34,
+    reserve: 136,
+    reloadTime: 1.75,
+    spread: 0.036,
+    adsSpread: 0.011,
+    recoil: 0.014,
+    moveMult: 1.04,
+    falloffNear: 11,
+    falloffFar: 42,
+    falloffMin: 0.38,
     sound: 'smg',
   },
   arc17: {
     id: 'arc17',
     name: 'ARC-17 突击步枪',
+    role: '中远全能 · 精准控枪',
     slot: 2,
     auto: true,
     fireRate: 660,
-    damage: 28,
-    headshotMult: 1.8,
+    damage: 30,
+    headshotMult: 2.0,
+    armorPen: 0.72,
     pellets: 1,
     magSize: 30,
     reserve: 120,
-    reloadTime: 2.2,
-    spread: 0.035,
-    adsSpread: 0.008,
-    recoil: 0.02,
-    moveMult: 0.9,
-    falloffNear: 15,
-    falloffFar: 65,
-    falloffMin: 0.45,
+    reloadTime: 2.1,
+    spread: 0.030,
+    adsSpread: 0.006,
+    recoil: 0.019,
+    moveMult: 0.92,
+    falloffNear: 20,
+    falloffFar: 74,
+    falloffMin: 0.55,
     sound: 'rifle',
   },
   warden: {
     id: 'warden',
-    name: 'Warden 霰弹枪',
+    name: 'Warden 破门霰弹',
+    role: '10弹丸爆发 · 贴脸清场',
     slot: 2,
     auto: false,
-    fireRate: 85,
-    damage: 12,
-    headshotMult: 1.4,
-    pellets: 8,
+    fireRate: 92,
+    damage: 13,
+    headshotMult: 1.5,
+    armorPen: 0.5,
+    pellets: 10,
     magSize: 8,
     reserve: 40,
-    reloadTime: 2.8,
-    spread: 0.09,
-    adsSpread: 0.045,
-    recoil: 0.06,
-    moveMult: 0.82,
-    falloffNear: 8,
-    falloffFar: 28,
-    falloffMin: 0.3,
+    reloadTime: 2.55,
+    spread: 0.088,
+    adsSpread: 0.042,
+    recoil: 0.062,
+    moveMult: 0.88,
+    falloffNear: 9,
+    falloffFar: 26,
+    falloffMin: 0.28,
     sound: 'shotgun',
   },
   longshot: {
     id: 'longshot',
-    name: 'Longshot 狙击枪',
+    name: 'Longshot 反器材狙击',
+    role: '高倍穿甲 · 一击必杀',
     slot: 2,
     auto: false,
-    fireRate: 45,
-    damage: 120,
-    headshotMult: 2.2,
+    fireRate: 48,
+    damage: 128,
+    headshotMult: 2.6,
+    armorPen: 0.92,
     pellets: 1,
     magSize: 5,
     reserve: 25,
-    reloadTime: 3.2,
-    spread: 0.02,
-    adsSpread: 0.001,
-    recoil: 0.09,
-    moveMult: 0.72,
-    falloffNear: 30,
-    falloffFar: 200,
-    falloffMin: 0.75,
+    reloadTime: 3.0,
+    spread: 0.022,
+    adsSpread: 0.0006,
+    recoil: 0.092,
+    moveMult: 0.78,
+    falloffNear: 45,
+    falloffFar: 240,
+    falloffMin: 0.85,
     sound: 'sniper',
   },
   bruiser: {
     id: 'bruiser',
-    name: 'Bruiser 轻机枪',
+    name: 'Bruiser 压制轻机枪',
+    role: '120发弹鼓 · 越打越稳',
     slot: 2,
     auto: true,
-    fireRate: 720,
-    damage: 24,
-    headshotMult: 1.6,
+    fireRate: 760,
+    damage: 25,
+    headshotMult: 1.65,
+    armorPen: 0.75,
     pellets: 1,
-    magSize: 100,
-    reserve: 200,
-    reloadTime: 4.2,
-    spread: 0.05,
-    adsSpread: 0.016,
-    recoil: 0.022,
-    moveMult: 0.78,
-    falloffNear: 12,
-    falloffFar: 55,
-    falloffMin: 0.4,
+    magSize: 120,
+    reserve: 240,
+    reloadTime: 3.8,
+    spread: 0.048,
+    adsSpread: 0.014,
+    recoil: 0.020,
+    moveMult: 0.80,
+    falloffNear: 16,
+    falloffFar: 64,
+    falloffMin: 0.48,
     sound: 'lmg',
   },
   thunder: {
     id: 'thunder',
-    name: 'Thunder 手雷',
+    name: 'Thunder 高爆破片雷',
+    role: '范围破片 · 逼位清点',
     slot: 3,
     auto: false,
     projectile: 'grenade',
     fireRate: 55,
-    damage: 180,
+    damage: 185,
     headshotMult: 1,
     pellets: 1,
     magSize: 99,
@@ -170,9 +180,9 @@ export const BUILTIN_WEAPONS = Object.freeze({
     spread: 0,
     adsSpread: 0,
     recoil: 0,
-    moveMult: 1,
-    falloffNear: 3,
-    falloffFar: 11,
+    moveMult: 1.02,
+    falloffNear: 3.5,
+    falloffFar: 12,
     falloffMin: 0.25,
     sound: 'throw',
   },
@@ -185,9 +195,11 @@ export class WeaponRuntime {
     this.def = def;
     this.ammo = def.magSize;
     this.reserve = def.reserve;
-    this.state = 'ready'; // ready | reloading | empty
+    this.state = 'ready';
     this.nextFireAt = 0;
     this.reloadEnd = 0;
+    this.sustainedShots = 0;
+    this.lastShotAt = -10;
   }
 
   get interval() {
@@ -200,10 +212,13 @@ export class WeaponRuntime {
 
   fire(time) {
     if (!this.canFire(time)) return { ok: false };
+    if (time - this.lastShotAt < 0.35) this.sustainedShots = Math.min(24, this.sustainedShots + 1);
+    else this.sustainedShots = 1;
+    this.lastShotAt = time;
     this.ammo -= 1;
     this.nextFireAt = time + this.interval;
     if (this.ammo === 0) this.state = 'empty';
-    return { ok: true, ammo: this.ammo };
+    return { ok: true, ammo: this.ammo, sustained: this.sustainedShots };
   }
 
   startReload(time) {
@@ -212,6 +227,7 @@ export class WeaponRuntime {
     }
     this.state = 'reloading';
     this.reloadEnd = time + this.def.reloadTime;
+    this.sustainedShots = 0;
     return { ok: true };
   }
 
@@ -227,12 +243,12 @@ export class WeaponRuntime {
     return null;
   }
 
-  // 跨局复用前重置时间状态：房主每局把 time 归零，旧的 nextFireAt/reloadEnd
-  // 会让 canFire(0) 永远为 false，导致买来的枪整局打不出伤害。
   reset(time = 0) {
     this.state = 'ready';
     this.nextFireAt = time;
     this.reloadEnd = 0;
+    this.sustainedShots = 0;
+    this.lastShotAt = -10;
   }
 }
 
@@ -253,12 +269,15 @@ function damageFalloffSafe(def, dist) {
   return def.damage * (1 - t * (1 - min));
 }
 
-export function applySpread(def, ads, rng = Math.random) {
-  const max = ads ? def.adsSpread : def.spread;
+export function applySpread(def, ads, rng = Math.random, sustained = 0) {
+  let max = ads ? def.adsSpread : def.spread;
+  // Bruiser 轻机枪专属特性：连续射击超过 5 发后散布收束（越打越稳）
+  if (def?.id === 'bruiser' && sustained > 5) {
+    max *= Math.max(0.45, 1 - (sustained - 5) * 0.04);
+  }
   return rng() * max;
 }
 
-// 半自动武器只在“松开→按下”的边沿开火；全自动/近战按住即连发。
 export function shouldFire(def, held, wasHeld) {
   if (!held) return false;
   if (def?.auto || def?.melee) return true;
